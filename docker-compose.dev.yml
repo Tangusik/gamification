@@ -1,0 +1,243 @@
+# Окружение разработки.
+#
+#   docker compose -f docker-compose.dev.yml up -d --build
+#
+# Отличия от деплойного docker-compose.yml:
+#   - порт 5432 опубликован (pgAdmin и DB-тесты ходят в базу с хоста);
+#   - поднимается pgAdmin;
+#   - смонтирован deploy/postgres/init/ — на пустом томе создаётся база
+#     users_test;
+#   - имя проекта своё, поэтому тома разработки и деплоя не пересекаются.
+#
+# Файл самодостаточен (а не override): критерий готовности этапа
+# запускает его одним -f. Дублирование с docker-compose.yml осознанное —
+# extends не переносит depends_on, и связность окружения потерялась бы.
+#
+# Значения переменных — из окружения оболочки или из .env в корне.
+# Образец: deploy/.env.example. Секретов здесь нет.
+
+name: gamification-dev
+
+x-users-env: &users-env
+  USERS_APP_NAME: users
+  USERS_ENVIRONMENT: ${USERS_ENVIRONMENT:-local}
+  USERS_LOG_LEVEL: ${USERS_LOG_LEVEL:-INFO}
+  # /api/v1 — как в проде: перед сервисом стоит шлюз web, и схема
+  # обязана объявлять адреса, по которым клиент реально ходит.
+  # Цена решения: Swagger по прямому порту 127.0.0.1:8000/docs больше
+  # не работает — страница откроется, но схему по /api/v1/openapi.json
+  # на прямом порту не найдёт. Рабочий Swagger — через шлюз, на
+  # 127.0.0.1:8080/docs (см. services/web/nginx/dev/docs.conf).
+  # Прямой порт остаётся для curl и тестов.
+  USERS_ROOT_PATH: /api/v1
+  USERS_STORAGE_BACKEND: postgres
+  USERS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-users}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, see deploy/.env.example}@postgres:5432/${POSTGRES_DB:-users}
+  USERS_REDIS_URL: redis://redis:6379/0
+  USERS_JWT_PRIVATE_KEY: ${USERS_JWT_PRIVATE_KEY:?USERS_JWT_PRIVATE_KEY is required (PEM block), see services/users/README.md}
+  USERS_JWT_PUBLIC_KEY: ${USERS_JWT_PUBLIC_KEY:?USERS_JWT_PUBLIC_KEY is required (PEM block), see services/users/README.md}
+  USERS_JWT_ALGORITHM: ${USERS_JWT_ALGORITHM:-RS256}
+  USERS_JWT_LIFETIME_SECONDS: ${USERS_JWT_LIFETIME_SECONDS:-900}
+  USERS_BOOTSTRAP_ADMIN_EMAIL: ${USERS_BOOTSTRAP_ADMIN_EMAIL:-}
+  USERS_BOOTSTRAP_ADMIN_PASSWORD: ${USERS_BOOTSTRAP_ADMIN_PASSWORD:-}
+  # Единственный служебный секрет вызывающего (gamification), который
+  # users принимает на внутреннем выпуске токена (C1). Значение то же,
+  # что GAMIFICATION_USERS_SERVICE_SECRET ниже.
+  USERS_INTERNAL_GAMIFICATION_SECRET: "${INTERNAL_GAMIFICATION_SECRET:?INTERNAL_GAMIFICATION_SECRET is required, at least 32 chars, see deploy/.env.example}"
+
+x-gamification-env: &gamification-env
+  GAMIFICATION_APP_NAME: gamification
+  GAMIFICATION_ENVIRONMENT: ${GAMIFICATION_ENVIRONMENT:-local}
+  GAMIFICATION_LOG_LEVEL: ${GAMIFICATION_LOG_LEVEL:-INFO}
+  # Как у USERS_ROOT_PATH: /api/v1, как за шлюзом. Прямой порт остаётся
+  # для curl и тестов, Swagger — через шлюз (nginx/dev/docs-gamification.conf).
+  GAMIFICATION_ROOT_PATH: /api/v1
+  GAMIFICATION_STORAGE_BACKEND: postgres
+  # Своя база и своя роль (I1) — не подключается к базе users. Роль
+  # приложения — gamification_app (У1): без прав владельца схемы и
+  # таблиц, без BYPASSRLS. Пароль владельца (GAMIFICATION_DB_PASSWORD)
+  # сюда не подставляется намеренно — в контейнер gamification он не
+  # попадает.
+  GAMIFICATION_DATABASE_URL: postgresql+asyncpg://gamification_app:${GAMIFICATION_APP_DB_PASSWORD:?GAMIFICATION_APP_DB_PASSWORD is required, see deploy/.env.example}@postgres:5432/gamification
+  # Тот же Redis, что у users: только чтение denylist (K1).
+  GAMIFICATION_REDIS_URL: redis://redis:6379/0
+  GAMIFICATION_JWT_PUBLIC_KEY: ${USERS_JWT_PUBLIC_KEY:?USERS_JWT_PUBLIC_KEY is required (PEM block), see services/users/README.md}
+  GAMIFICATION_JWT_ALGORITHM: ${USERS_JWT_ALGORITHM:-RS256}
+  GAMIFICATION_USERS_INTERNAL_URL: http://users:8000
+  GAMIFICATION_USERS_SERVICE_SECRET: "${INTERNAL_GAMIFICATION_SECRET:?INTERNAL_GAMIFICATION_SECRET is required, at least 32 chars, see deploy/.env.example}"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-users}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, see deploy/.env.example}
+      POSTGRES_DB: ${POSTGRES_DB:-users}
+      # Читает 02-create-gamification-db.sh: роль и база gamification
+      # заводятся в этом же кластере (I1), только на пустом томе.
+      GAMIFICATION_DB_PASSWORD: ${GAMIFICATION_DB_PASSWORD:?GAMIFICATION_DB_PASSWORD is required, see deploy/.env.example}
+      # Пароль роли приложения gamification_app (У1) — без прав
+      # владельца схемы и таблиц, без BYPASSRLS.
+      GAMIFICATION_APP_DB_PASSWORD: ${GAMIFICATION_APP_DB_PASSWORD:?GAMIFICATION_APP_DB_PASSWORD is required, see deploy/.env.example}
+    ports:
+      # Наружу — только в разработке: сюда ходят pgAdmin и pytest -m db.
+      # Явный 127.0.0.1 обязателен: без адреса Docker публикует порт на
+      # всех интерфейсах, и база с dev-паролем оказывается доступна из
+      # локальной сети. Роль читается из БД, поэтому такой доступ — это
+      # вставка себе строки в memberships с role='institution_admin' и
+      # полностью легитимный токен через публичный эндпоинт.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Скрипты инициализации отрабатывают один раз, на пустом томе.
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-users} -d ${POSTGRES_DB:-users}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  migrate:
+    build: &users-build
+      context: .
+      dockerfile: services/users/Dockerfile
+    image: gamification/users:${USERS_IMAGE_TAG:-dev}
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment: *users-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  users:
+    build: *users-build
+    image: gamification/users:${USERS_IMAGE_TAG:-dev}
+    restart: unless-stopped
+    environment: *users-env
+    ports:
+      # Только петля: окружение разработки в сеть не выставляется.
+      - "127.0.0.1:${USERS_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  migrate-gamification:
+    build: &gamification-build
+      context: .
+      dockerfile: services/gamification/Dockerfile
+    image: gamification/gamification:${GAMIFICATION_IMAGE_TAG:-dev}
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *gamification-env
+      # Миграции идут под ролью-владельцем gamification (У7): 0004
+      # выдаёт GRANT и создаёт политики, это может только владелец
+      # схемы и таблиц. Переопределение после якоря — значение из
+      # gamification-env к этому сервису не попадает.
+      GAMIFICATION_DATABASE_URL: postgresql+asyncpg://gamification:${GAMIFICATION_DB_PASSWORD:?GAMIFICATION_DB_PASSWORD is required, see deploy/.env.example}@postgres:5432/gamification
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  gamification:
+    build: *gamification-build
+    image: gamification/gamification:${GAMIFICATION_IMAGE_TAG:-dev}
+    restart: unless-stopped
+    environment: *gamification-env
+    ports:
+      # Только петля, как у users.
+      - "127.0.0.1:${GAMIFICATION_PORT:-8001}:8000"
+    # depends_on: users НЕТ намеренно (раздел 4.6 плана) — иначе
+    # падение users снимало бы с балансировки весь сервис.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate-gamification:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      # Контекст — services/web, а не корень: у фронта нет зависимостей
+      # вне своего каталога. Из-за этого работает
+      # services/web/.dockerignore, а не корневой.
+      context: ./services/web
+    image: gamification/web:${WEB_IMAGE_TAG:-dev}
+    restart: unless-stopped
+    ports:
+      # Только петля: окружение разработки в сеть не выставляется.
+      # Явный 127.0.0.1 обязателен — без адреса Docker публикует порт
+      # на всех интерфейсах.
+      - "127.0.0.1:${WEB_PORT:-8080}:80"
+    volumes:
+      # Конфиг шлюза — единственное, что монтируется с хоста: его
+      # правка не должна требовать пересборки образа. Исходники фронта
+      # НЕ монтируются и dev-сервера Vite здесь нет — режим разработки
+      # только контейнерный, браузер всегда ходит в nginx.
+      - ./services/web/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      # Сниппеты заголовков, которые default.conf подключает через
+      # include (08c, C1) — тем же путём, что и в образе (Dockerfile).
+      - ./services/web/nginx/security-headers.conf:/etc/nginx/security-headers.conf:ro
+      - ./services/web/nginx/csp.conf:/etc/nginx/csp.conf:ro
+      - ./services/web/nginx/csp-api.conf:/etc/nginx/csp-api.conf:ro
+      # Dev-only фрагмент: Swagger сервиса users через шлюз. В образ он
+      # не попадает и в деплое отсутствует.
+      - ./services/web/nginx/dev/docs.conf:/etc/nginx/dev/docs.conf:ro
+      # То же самое для gamification: свой openapi_url, свой /docs.
+      - ./services/web/nginx/dev/docs-gamification.conf:/etc/nginx/dev/docs-gamification.conf:ro
+    depends_on:
+      users:
+        # Именно healthy: nginx резолвит имя users при старте, и с
+        # неподнятым сервисом падает с "host not found in upstream".
+        condition: service_healthy
+      gamification:
+        condition: service_healthy
+
+  pgadmin:
+    image: dpage/pgadmin4:8.14
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?PGADMIN_DEFAULT_PASSWORD is required, see deploy/.env.example}
+      # Инструмент разработки на localhost: мастер первого входа только
+      # мешает.
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      # Только петля: инструмент разработки с dev-паролем.
+      - "127.0.0.1:${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    healthcheck:
+      # /misc/ping отвечает без авторизации; curl в образе нет, wget есть.
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:80/misc/ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:
+  pgadmin-data:

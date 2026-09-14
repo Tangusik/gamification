@@ -1,0 +1,248 @@
+# Окружение деплоя.
+#
+#   docker compose up -d --build
+#
+# Запускать **только с явным --env-file**, например:
+#
+#   docker compose --env-file deploy/.env.production -f docker-compose.yml up -d
+#
+# Без него compose подхватит корневой .env — тот же, что у окружения
+# разработки: dev-пароль базы, рабочую пару ключей разработчика и
+# USERS_ENVIRONMENT=local, который перебивает дефолт production. Ошибка
+# тихая: ни compose, ни сервис на неё не возражают.
+#
+# Значения переменных берутся из окружения оболочки или из файла,
+# указанного в --env-file. Образец — deploy/.env.example.
+# Секретов в этом файле нет и быть не должно: он попадает в репозиторий.
+#
+# Наружу публикуются только порты 80/443 (и 443/udp под HTTP/3) у
+# caddy (В1 = H3, .claude/plans/08-web-ux-and-deploy.md): TLS
+# терминируется там, Let's Encrypt сертификаты выпускаются и
+# продлеваются автоматически. web порт наружу не публикует вовсе (П12)
+# — иначе сайт был бы доступен в обход TLS, в дополнение к HTTPS через
+# caddy. Postgres, Redis, users и gamification доступны только внутри
+# сети compose. web по-прежнему единственный шлюз к /api/v1/...
+# (.claude/knowledge/07-routing.md) — caddy этот маппинг не дублирует.
+#
+# CADDY_DOMAIN и CADDY_EMAIL обязательны через :? — на момент
+# реализации их значений у владельца ещё нет (см. deploy/.env.production.example).
+
+name: gamification
+
+# Общий набор переменных сервиса: один и тот же для приложения и для
+# шага миграций, потому что alembic читает тот же Settings.
+x-users-env: &users-env
+  USERS_APP_NAME: users
+  USERS_ENVIRONMENT: ${USERS_ENVIRONMENT:-production}
+  USERS_LOG_LEVEL: ${USERS_LOG_LEVEL:-INFO}
+  # Публичный префикс шлюза. Маршруты он не префиксует — нужен ровно
+  # для того, чтобы OpenAPI объявил servers: [{"url": "/api/v1"}] и
+  # схема не врала про адреса.
+  USERS_ROOT_PATH: /api/v1
+  USERS_STORAGE_BACKEND: postgres
+  USERS_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-users}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, see deploy/.env.example}@postgres:5432/${POSTGRES_DB:-users}
+  USERS_REDIS_URL: redis://redis:6379/0
+  # Многострочный PEM целиком. Значение приходит из окружения, в файлы
+  # compose не вписывается. Незаданный ключ роняет compose здесь, а не
+  # контейнер при старте.
+  USERS_JWT_PRIVATE_KEY: ${USERS_JWT_PRIVATE_KEY:?USERS_JWT_PRIVATE_KEY is required (PEM block), see services/users/README.md}
+  USERS_JWT_PUBLIC_KEY: ${USERS_JWT_PUBLIC_KEY:?USERS_JWT_PUBLIC_KEY is required (PEM block), see services/users/README.md}
+  USERS_JWT_ALGORITHM: ${USERS_JWT_ALGORITHM:-RS256}
+  USERS_JWT_LIFETIME_SECONDS: ${USERS_JWT_LIFETIME_SECONDS:-900}
+  # Пустые значения допустимы: тогда сид владельца не выполняется.
+  USERS_BOOTSTRAP_ADMIN_EMAIL: ${USERS_BOOTSTRAP_ADMIN_EMAIL:-}
+  USERS_BOOTSTRAP_ADMIN_PASSWORD: ${USERS_BOOTSTRAP_ADMIN_PASSWORD:-}
+  # Единственный служебный секрет вызывающего (gamification), который
+  # users принимает на внутреннем выпуске токена (C1). Значение то же,
+  # что GAMIFICATION_USERS_SERVICE_SECRET ниже.
+  USERS_INTERNAL_GAMIFICATION_SECRET: "${INTERNAL_GAMIFICATION_SECRET:?INTERNAL_GAMIFICATION_SECRET is required, at least 32 chars, see deploy/.env.example}"
+
+# Общий набор переменных сервиса gamification: приложение и одноразовый
+# шаг миграций читают один и тот же Settings. Без depends_on: users —
+# раздел 4.6 плана: readiness gamification users не проверяет, иначе
+# падение users снимало бы с балансировки весь сервис.
+x-gamification-env: &gamification-env
+  GAMIFICATION_APP_NAME: gamification
+  GAMIFICATION_ENVIRONMENT: ${GAMIFICATION_ENVIRONMENT:-production}
+  GAMIFICATION_LOG_LEVEL: ${GAMIFICATION_LOG_LEVEL:-INFO}
+  GAMIFICATION_ROOT_PATH: /api/v1
+  GAMIFICATION_STORAGE_BACKEND: postgres
+  # Своя база и своя роль (I1) — не подключается к базе users. Роль
+  # приложения — gamification_app (У1): без прав владельца схемы и
+  # таблиц, без BYPASSRLS. Пароль владельца (GAMIFICATION_DB_PASSWORD)
+  # сюда не подставляется намеренно — в контейнер gamification он не
+  # попадает.
+  GAMIFICATION_DATABASE_URL: postgresql+asyncpg://gamification_app:${GAMIFICATION_APP_DB_PASSWORD:?GAMIFICATION_APP_DB_PASSWORD is required, see deploy/.env.example}@postgres:5432/gamification
+  # Тот же Redis, что у users: только чтение denylist (K1).
+  GAMIFICATION_REDIS_URL: redis://redis:6379/0
+  GAMIFICATION_JWT_PUBLIC_KEY: ${USERS_JWT_PUBLIC_KEY:?USERS_JWT_PUBLIC_KEY is required (PEM block), see services/users/README.md}
+  GAMIFICATION_JWT_ALGORITHM: ${USERS_JWT_ALGORITHM:-RS256}
+  GAMIFICATION_USERS_INTERNAL_URL: http://users:8000
+  GAMIFICATION_USERS_SERVICE_SECRET: "${INTERNAL_GAMIFICATION_SECRET:?INTERNAL_GAMIFICATION_SECRET is required, at least 32 chars, see deploy/.env.example}"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-users}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, see deploy/.env.example}
+      POSTGRES_DB: ${POSTGRES_DB:-users}
+      # Читает 02-create-gamification-db.sh: роль и база gamification
+      # заводятся в этом же кластере (I1), только на пустом томе.
+      GAMIFICATION_DB_PASSWORD: ${GAMIFICATION_DB_PASSWORD:?GAMIFICATION_DB_PASSWORD is required, see deploy/.env.example}
+      # Пароль роли приложения gamification_app (У1) — без прав
+      # владельца схемы и таблиц, без BYPASSRLS.
+      GAMIFICATION_APP_DB_PASSWORD: ${GAMIFICATION_APP_DB_PASSWORD:?GAMIFICATION_APP_DB_PASSWORD is required, see deploy/.env.example}
+    volumes:
+      # Именованный том: без него база живёт ровно до пересоздания
+      # контейнера.
+      - postgres-data:/var/lib/postgresql/data
+      # В деплое монтируется только этот файл: users_test деплою не
+      # нужен (deploy/postgres/init/01-create-test-db.sql остаётся
+      # только у dev-стека).
+      - ./deploy/postgres/init/02-create-gamification-db.sh:/docker-entrypoint-initdb.d/02-create-gamification-db.sh:ro
+    healthcheck:
+      # -U/-d обязательны: без них pg_isready спрашивает базу по имени
+      # пользователя ОС и считает готовый кластер недоступным.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-users} -d ${POSTGRES_DB:-users}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    # appendonly: denylist переживает рестарт Redis. Потеря denylist не
+    # роняет сервис (fail-open), но воскрешает погашенные токены.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  migrate:
+    build: &users-build
+      # Контекст — корень репозитория: в образ обязана попасть
+      # libs/gamification-auth, в PyPI её нет.
+      context: .
+      dockerfile: services/users/Dockerfile
+    image: gamification/users:${USERS_IMAGE_TAG:-local}
+    # One-shot: контейнер отрабатывает и завершается. Миграции вынесены
+    # из entrypoint сервиса намеренно — при нескольких репликах они
+    # стартовали бы параллельно; отдельный шаг переносится в k8s как Job.
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment: *users-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  users:
+    build: *users-build
+    image: gamification/users:${USERS_IMAGE_TAG:-local}
+    restart: unless-stopped
+    environment: *users-env
+    # ports нет намеренно: наружу смотрит только web. Сервис доступен
+    # по имени users:8000 внутри сети compose — этого достаточно шлюзу.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        # Сервис поднимается только после успешной миграции: схема
+        # обязана существовать до первого запроса.
+        condition: service_completed_successfully
+
+  migrate-gamification:
+    build: &gamification-build
+      # Контекст — корень репозитория: в образ обязана попасть
+      # libs/gamification-auth, в PyPI её нет.
+      context: .
+      dockerfile: services/gamification/Dockerfile
+    image: gamification/gamification:${GAMIFICATION_IMAGE_TAG:-local}
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *gamification-env
+      # Миграции идут под ролью-владельцем gamification (У7): 0004
+      # выдаёт GRANT и создаёт политики, это может только владелец
+      # схемы и таблиц. Переопределение после якоря — значение из
+      # gamification-env к этому сервису не попадает.
+      GAMIFICATION_DATABASE_URL: postgresql+asyncpg://gamification:${GAMIFICATION_DB_PASSWORD:?GAMIFICATION_DB_PASSWORD is required, see deploy/.env.example}@postgres:5432/gamification
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  gamification:
+    build: *gamification-build
+    image: gamification/gamification:${GAMIFICATION_IMAGE_TAG:-local}
+    restart: unless-stopped
+    environment: *gamification-env
+    # ports нет намеренно, как и у users: наружу смотрит только web.
+    # depends_on: users НЕТ намеренно (раздел 4.6 плана) — иначе
+    # падение users снимало бы с балансировки весь сервис, включая
+    # эндпоинты, которым выпуск токена не нужен.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate-gamification:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      # Контекст — services/web, а не корень: у фронта нет зависимостей
+      # вне своего каталога.
+      context: ./services/web
+    image: gamification/web:${WEB_IMAGE_TAG:-local}
+    restart: unless-stopped
+    # ports нет (П12): наружу смотрит только caddy, web доступен внутри
+    # сети compose по имени web:80 — этого достаточно caddy.
+    depends_on:
+      users:
+        # nginx резолвит имя users при старте: с неподнятым сервисом он
+        # падает с "host not found in upstream".
+        condition: service_healthy
+      gamification:
+        condition: service_healthy
+
+  caddy:
+    # Версия закреплена: плавающий тег (latest/alpine) непредсказуемо
+    # меняет поведение при пересборке через полгода после деплоя.
+    image: caddy:2.9.1-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      # Обязательны: без домена Caddy не знает, для чего запрашивать
+      # сертификат, без почты Let's Encrypt не сможет уведомить об
+      # истечении/проблемах продления.
+      CADDY_DOMAIN: ${CADDY_DOMAIN:?CADDY_DOMAIN is required (домен для TLS-сертификата), see deploy/.env.production.example}
+      CADDY_EMAIL: ${CADDY_EMAIL:?CADDY_EMAIL is required (почта для Let's Encrypt), see deploy/.env.production.example}
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # caddy_data — здесь лежат выпущенные сертификаты и их приватные
+      # ключи: без именованного тома Caddy запрашивал бы у Let's
+      # Encrypt новый сертификат при каждом пересоздании контейнера, а
+      # у него есть лимиты на число выпусков в неделю на домен.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  redis-data:
+  caddy-data:
+  caddy-config:

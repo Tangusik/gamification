@@ -1,0 +1,7 @@
+# Без этого файла checkout на Windows с autocrlf даёт CRLF в файлах,
+# которые обязаны остаться LF (П13): init-скрипт Postgres с CRLF падает
+# на первой же строке (bad interpreter), nginx-конфиги с CRLF nginx не
+# всегда парсит одинаково между версиями образа — не стоит рисковать.
+*.sh text eol=lf
+*.conf text eol=lf
+Caddyfile text eol=lf

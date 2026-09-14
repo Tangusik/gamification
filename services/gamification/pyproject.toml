@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gamification-service"
+version = "0.1.0"
+description = "Gamification microservice of the gamification platform"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi==0.141.1",
+    # Проверка токенов — общая для всех сервисов. Пакета в PyPI нет:
+    # ставится из репозитория (`pip install -e libs/gamification-auth`)
+    # ДО установки сервиса.
+    "gamification-auth==0.1.0",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    # Проверка токенов асимметричная (RS256), поэтому cryptography нужен
+    # в рантайме, а не транзитивно.
+    "pyjwt[crypto]==2.13.0",
+    "uvicorn==0.52.4",
+    # Хранилище. Extra `asyncio` тянет greenlet, без которого async-движок
+    # SQLAlchemy не работает вовсе.
+    "sqlalchemy[asyncio]==2.0.52",
+    # Драйвер PostgreSQL для async-движка: URL вида postgresql+asyncpg://.
+    "asyncpg==0.31.0",
+    # Миграции схемы. В рантайме сервисом не импортируется, но остаётся
+    # рантайм-зависимостью: шаг миграций выполняется тем же образом.
+    "alembic==1.19.2",
+    # Чтение denylist отозванных токенов users (K1, только чтение).
+    "redis==8.1.0",
+    # Внутренний вызов users на выпуск токена в контексте (раздел 4).
+    # В отличие от users, здесь это рантайм-зависимость, а не dev-only:
+    # переключение учреждения обращается к users на каждый запрос.
+    "httpx==0.28.1",
+    # Pydantic сам по себе не проверяет формат email: EmailStr требует
+    # этот пакет как extra-зависимость (риск 5, раздел «Ч2» плана).
+    # Версия — та же, что стоит у users (там приходит транзитивно через
+    # fastapi-users).
+    "email-validator==2.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "ruff==0.16.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W", "N"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["db: требует поднятой PostgreSQL"]
+# Обычный прогон не требует docker: тесты против реальной БД
+# запускаются явно — `pytest -m db`.
+addopts = "-m 'not db'"

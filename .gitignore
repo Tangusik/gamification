@@ -1,0 +1,15 @@
+.claude
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+*.env
+!.env.example
+# deploy/.env.production и подобные (П2): без этой строки прод-секреты
+# (приватный ключ подписи, пароли БД) попадут в коммит — ни ".env", ни
+# "*.env" под ".env.production" не подходят.
+.env.*
+!.env.example
+!deploy/.env.production.example

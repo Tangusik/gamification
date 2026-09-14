@@ -1,0 +1,31 @@
+# Прод-прокси перед web (В1 = H3, .claude/plans/08-web-ux-and-deploy.md).
+# Только прод-compose (docker-compose.yml) — в dev его нет, dev ходит
+# прямо в web по HTTP (docker-compose.dev.yml), конфиг фронта
+# (services/web/nginx/default.conf) от этого не меняется: он и так не
+# знает о TLS, а X-Forwarded-Proto доверяет прокси перед собой (П11).
+#
+# Единственная обязанность контейнера — TLS и его продление. Раздачу
+# статики и маппинг /api/v1/... на users/gamification по-прежнему
+# делает web, Caddy этого не дублирует.
+#
+# Домен и почта — из переменных окружения CADDY_DOMAIN/CADDY_EMAIL
+# (docker-compose.yml, обязательны через :?). Реальных значений на
+# момент реализации нет — владелец ещё не выбрал домен и почту для
+# Let's Encrypt (см. отчёт C1–C3).
+{
+	email {$CADDY_EMAIL}
+}
+
+{$CADDY_DOMAIN} {
+	# Редирект 80 -> 443 Caddy делает сам для доменных (не IP/localhost)
+	# сайтов — отдельно объявлять не нужно.
+
+	# HSTS. max-age — полгода, консервативно: без includeSubDomains (у
+	# проекта пока нет поддоменов, которые обязаны быть HTTPS) и без
+	# preload (список preload практически необратим — сайт входит в
+	# него на годы вперёд, даже если потом захочется временно вернуть
+	# HTTP). Значение — предмет отдельного решения владельца, см. отчёт.
+	header Strict-Transport-Security "max-age=15552000"
+
+	reverse_proxy web:80
+}
