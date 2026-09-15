@@ -5,7 +5,7 @@
  * внутри страниц: nginx отдаёт `index.html` на любой URL.
  */
 import { useCallback } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router'
+import { BrowserRouter, Navigate, Route, Routes, useNavigate, useParams } from 'react-router'
 
 import { AuthProvider } from './auth/AuthProvider'
 import { RequireAnon } from './auth/RequireAnon'
@@ -13,7 +13,6 @@ import { RequireAuth } from './auth/RequireAuth'
 import { RequireInstitution } from './auth/RequireInstitution'
 import { AppLayout } from './layout/AppLayout'
 import { ChangePasswordPage } from './pages/ChangePasswordPage'
-import { CurrencyStudentsPage } from './pages/CurrencyStudentsPage'
 import { GroupPage } from './pages/GroupPage'
 import { GroupsPage } from './pages/GroupsPage'
 import { HomePage } from './pages/HomePage'
@@ -32,6 +31,21 @@ import { RegisterPage } from './pages/RegisterPage'
 import { StudentCurrencyPage } from './pages/StudentCurrencyPage'
 import { StudentsPage } from './pages/StudentsPage'
 import { TeachersPage } from './pages/TeachersPage'
+
+/**
+ * Редиректы со старых адресов `…/currency` и `…/currency/:userId` на новые
+ * `…/students` и `…/students/:userId` (раздел «Ученики», В4/а) — сохранённые
+ * ссылки и напечатанные памятки не должны ломаться.
+ */
+function RedirectToStudents() {
+  const { id } = useParams<{ id: string }>()
+  return <Navigate to={`/institutions/${id}/students`} replace />
+}
+
+function RedirectToStudent() {
+  const { id, userId } = useParams<{ id: string; userId: string }>()
+  return <Navigate to={`/institutions/${id}/students/${userId}`} replace />
+}
 
 /**
  * Внутренняя оболочка: живёт уже внутри роутера, поэтому может отдать
@@ -63,10 +77,12 @@ function AppShell() {
               <Route path="/institutions/:id/groups" element={<GroupsPage />} />
               <Route path="/institutions/:id/groups/:groupId" element={<GroupPage />} />
               <Route path="/institutions/:id/students" element={<StudentsPage />} />
+              <Route path="/institutions/:id/students/:userId" element={<StudentCurrencyPage />} />
+              {/* Старые адреса начислений — редирект, ссылки не ломаем (В4/а). */}
+              <Route path="/institutions/:id/currency" element={<RedirectToStudents />} />
+              <Route path="/institutions/:id/currency/:userId" element={<RedirectToStudent />} />
               <Route path="/institutions/:id/settings" element={<InstitutionSettingsPage />} />
               <Route path="/institutions/:id/balance" element={<MyBalancePage />} />
-              <Route path="/institutions/:id/currency" element={<CurrencyStudentsPage />} />
-              <Route path="/institutions/:id/currency/:userId" element={<StudentCurrencyPage />} />
               <Route path="/institutions/:id/privileges" element={<PrivilegesPage />} />
               <Route path="/institutions/:id/market" element={<MarketPage />} />
               <Route path="/institutions/:id/purchases" element={<PurchasesPage />} />

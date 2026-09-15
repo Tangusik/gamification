@@ -9,6 +9,7 @@ from fastapi_users import exceptions as fastapi_users_exceptions
 
 from app.auth.user_protocol import AppUserProtocol
 from app.core.config import MIN_PASSWORD_LENGTH
+from app.repositories.protocols import RefreshSessionRepository, UserRepository
 from app.schemas.user import UserCreate, UserUpdate
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,21 @@ class UserManager(UUIDIDMixin, BaseUserManager[AppUserProtocol, uuid.UUID]):
     этом этапе (нет почтового сервиса). При их подключении сюда
     обязательно добавить оба секрета — иначе первый же запрос упадёт с
     ``AttributeError``, — и брать их из настроек, а не из литералов.
+
+    ``refresh_sessions`` — опционален намеренно: менеджер используется и
+    там, где refresh-сессии ни при чём (заведение аккаунта через
+    ``POST /internal/users``), заводить там фиктивный репозиторий не за
+    чем. Смена пароля гасит все refresh-сессии пользователя (вопрос 5,
+    план 10-refresh) — только если репозиторий передан.
     """
+
+    def __init__(
+        self,
+        user_db: UserRepository,
+        refresh_sessions: RefreshSessionRepository | None = None,
+    ) -> None:
+        super().__init__(user_db)
+        self._refresh_sessions = refresh_sessions
 
     async def validate_password(
         self, password: str, user: UserCreate | AppUserProtocol
@@ -80,6 +95,17 @@ class UserManager(UUIDIDMixin, BaseUserManager[AppUserProtocol, uuid.UUID]):
         Флаг снимается тем же вызовом, чтобы ответ ``PATCH /users/me``
         уже содержал ``must_change_password: false`` — фронт обновляет
         ``user`` из этого ответа, второй запрос ему не нужен.
+
+        Смена пароля гасит все refresh-сессии пользователя (вопрос 5):
+        клиент, только что отправивший новый пароль, сам входит им
+        заново. Гашение происходит **до** записи нового хеша (L3, ревью
+        Ч3, решение владельца 2026-09-15): запись пароля и гашение сессий
+        идут через разные репозитории с собственными коммитами, единой
+        транзакции на двоих у них нет, а порядок «сперва хеш, потом
+        гашение» оставлял окно, где упавшее между ними гашение держало
+        сессии живыми уже при скомпрометированном пароле. Обратный
+        порядок безопаснее: если запись пароля после этого упадёт (или
+        не пройдёт валидацию), лишний выход из системы — цена, а не риск.
         """
         if user.must_change_password and user_update.password is not None:
             old_hashed_password = user.hashed_password
@@ -90,6 +116,15 @@ class UserManager(UUIDIDMixin, BaseUserManager[AppUserProtocol, uuid.UUID]):
                 raise InvalidPasswordException(
                     reason=("New password must differ from the temporary password")
                 )
+        if user_update.password is not None and self._refresh_sessions is not None:
+            # Сначала валидация: иначе отклонённый новый пароль (например,
+            # слишком короткий) всё равно выкидывал бы пользователя со всех
+            # устройств. ``super().update`` проверит пароль ещё раз — это
+            # дешёвая повторная проверка, а не второй источник правил.
+            await self.validate_password(user_update.password, user)
+            await self._refresh_sessions.revoke_for_user(
+                user.id, reason="password_change"
+            )
         updated_user = await super().update(
             user_update, user, safe=safe, request=request
         )

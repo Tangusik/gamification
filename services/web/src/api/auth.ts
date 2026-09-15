@@ -10,6 +10,13 @@ export type TokenResponse = {
   token_type: string
 }
 
+/**
+ * Заголовок CSRF-проверки cookie-пути (У6 плана `10-refresh.md`): `SameSite=Strict`
+ * не спасает от собственного origin, поэтому `refresh`/`logout` дополнительно
+ * требуют этот заголовок. Значение фиксировано контрактом сервера.
+ */
+const CSRF_HEADER = { 'X-Requested-With': 'gamification-web' }
+
 export type User = {
   id: string
   email: string
@@ -31,6 +38,12 @@ export type Membership = {
   kind: InstitutionKind
   role: UserRole
   status: MembershipStatus
+  /**
+   * Название внутренней валюты учреждения (В5/б) — настраивается в
+   * `InstitutionSettingsPage`. `null`, пока не задано; тогда используется
+   * запасное слово из `useCurrencyName` (`src/auth/useCurrencyName.ts`).
+   */
+  currency_name: string | null
 }
 
 export function register(email: string, password: string): Promise<User> {
@@ -48,12 +61,39 @@ export function login(email: string, password: string): Promise<TokenResponse> {
   return request<TokenResponse>('/users/auth/jwt/login', {
     method: 'POST',
     form: { username: email, password },
+    // Без заголовка сервер выдаёт access без refresh-cookie (К1 плана
+    // `10-refresh.md`) — тот же контракт, что уже требуют `refresh`/`logout`.
+    headers: CSRF_HEADER,
   })
 }
 
-/** Выход на сервере: гасит `jti` в denylist. Ответ — 204 без тела. */
-export function logout(token: string): Promise<void> {
-  return request<void>('/users/auth/jwt/logout', { method: 'POST', token })
+/**
+ * Обновить пару токенов по refresh-cookie (веб — только cookie-путь, У4).
+ * `institution_id` — последнее выбранное учреждение (`lastInstitutionId`);
+ * без него сервер сам использует то, что уже запомнено в сессии (вопрос 1
+ * плана `10-refresh.md`). Cookie уходит сама — same-origin запрос её не
+ * требует явно указывать.
+ */
+export function refresh(institutionId?: string | null): Promise<TokenResponse> {
+  return request<TokenResponse>('/users/auth/jwt/refresh', {
+    method: 'POST',
+    json: institutionId ? { institution_id: institutionId } : {},
+    headers: CSRF_HEADER,
+  })
+}
+
+/**
+ * Выход на сервере: гасит refresh-сессию по cookie и, если передан валидный
+ * access, кладёт его `jti` в denylist (необязательно, У10). Ответ — 204 без
+ * тела и всегда успешен: без `X-Requested-With` сервер ответит 403, поэтому
+ * заголовок обязателен даже без access-токена.
+ */
+export function logout(token?: string | null): Promise<void> {
+  return request<void>('/users/auth/jwt/logout', {
+    method: 'POST',
+    token: token ?? undefined,
+    headers: CSRF_HEADER,
+  })
 }
 
 export function getMe(token: string): Promise<User> {

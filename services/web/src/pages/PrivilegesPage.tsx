@@ -1,23 +1,27 @@
 /**
  * Каталог привилегий — `/institutions/:id/privileges`. Управляет только
  * `institution_admin` (П2): создание позиций, правка цены, остатка (в том
- * числе очистка до «без ограничения», L2) и активности.
- *
- * Бэкенда маркета ещё нет — экран собран по контракту плана
- * `.claude/plans/07-market.md` (раздел Ч1), живых проверок не было.
+ * числе очистка до «без ограничения», L2) и активности. Скрытие позиции —
+ * снятие `is_active` — действие обратимое, подтверждения не требует
+ * (раздел 7 плана `08-web-ux-and-deploy.md`).
  *
  * Строка остатка пустая = «без ограничения» (`stock: null`). Правка отправляет
  * только изменившиеся поля: очистка остатка шлёт `stock: null` явно, а поля,
  * которые админ не трогал, в тело `PATCH` вовсе не попадают (У11) — это же
  * гарантирует TypeScript-тип `UpdatePrivilegeInput`.
  */
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useParams } from 'react-router'
 
+import { ApiError } from '../api/errors'
 import * as marketApi from '../api/market'
 import type { Privilege, UpdatePrivilegeInput } from '../api/market'
 import { useAuth } from '../auth/authContext'
+import { useCurrencyName } from '../auth/useCurrencyName'
+import { FieldError } from '../components/FieldError'
 import { FormError } from '../components/FormError'
+import { PageHeader } from '../components/PageHeader'
+import { ScreenState } from '../components/ScreenState'
 import { messageForError } from '../i18n/errorMessages'
 
 type PrivilegeEdit = {
@@ -36,7 +40,8 @@ function toEdit(privilege: Privilege): PrivilegeEdit {
 
 export function PrivilegesPage() {
   const { id } = useParams<{ id: string }>()
-  const { token } = useAuth()
+  const { token, institution } = useAuth()
+  const currencyName = useCurrencyName()
 
   const [items, setItems] = useState<Privilege[] | null>(null)
   const [loadError, setLoadError] = useState<unknown>(null)
@@ -52,7 +57,8 @@ export function PrivilegesPage() {
   const [stock, setStock] = useState('')
   const [isActive, setIsActive] = useState(true)
   const [creating, setCreating] = useState(false)
-  const [createError, setCreateError] = useState<unknown>(null)
+  const [createError, setCreateError] = useState<ApiError | null>(null)
+  const titleInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     if (token === null || id === undefined) return
@@ -98,7 +104,7 @@ export function PrivilegesPage() {
       setIsActive(true)
       retry()
     } catch (caught) {
-      setCreateError(caught)
+      setCreateError(caught instanceof ApiError ? caught : new ApiError(0, 'UNKNOWN_ERROR'))
     } finally {
       setCreating(false)
     }
@@ -134,144 +140,174 @@ export function PrivilegesPage() {
     }
   }
 
+  const createFieldErrors = createError?.fieldErrors
+
   return (
-    <>
-      <main className="page">
-        <h1>Каталог привилегий</h1>
+    <main className="page">
+      <PageHeader title="Каталог привилегий" institutionName={institution?.name} />
 
-        <form className="form" onSubmit={handleCreate} noValidate>
-          <div className="field">
-            <label htmlFor="privilege-title">Название</label>
+      <form className="form" onSubmit={handleCreate} noValidate>
+        <div className="field">
+          <label htmlFor="privilege-title">Название</label>
+          <input
+            ref={titleInputRef}
+            id="privilege-title"
+            name="title"
+            type="text"
+            required
+            maxLength={100}
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            disabled={creating}
+            aria-invalid={createFieldErrors?.title !== undefined}
+          />
+          <FieldError message={createFieldErrors?.title} />
+        </div>
+
+        <div className="field">
+          <label htmlFor="privilege-description">Описание (необязательно)</label>
+          <input
+            id="privilege-description"
+            name="description"
+            type="text"
+            maxLength={500}
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            disabled={creating}
+            aria-invalid={createFieldErrors?.description !== undefined}
+          />
+          <FieldError message={createFieldErrors?.description} />
+        </div>
+
+        <div className="field">
+          <label htmlFor="privilege-price">{`Цена (в «${currencyName}»)`}</label>
+          <input
+            id="privilege-price"
+            name="price"
+            type="number"
+            min={1}
+            max={100000}
+            required
+            value={price}
+            onChange={(event) => setPrice(event.target.value)}
+            disabled={creating}
+            aria-invalid={createFieldErrors?.price !== undefined}
+          />
+          <FieldError message={createFieldErrors?.price} />
+        </div>
+
+        <div className="field">
+          <label htmlFor="privilege-stock">Остаток (пусто — без ограничения)</label>
+          <input
+            id="privilege-stock"
+            name="stock"
+            type="number"
+            min={0}
+            value={stock}
+            onChange={(event) => setStock(event.target.value)}
+            disabled={creating}
+            aria-invalid={createFieldErrors?.stock !== undefined}
+          />
+          <FieldError message={createFieldErrors?.stock} />
+        </div>
+
+        <div className="field">
+          <label htmlFor="privilege-active">
             <input
-              id="privilege-title"
-              name="title"
-              type="text"
-              required
-              maxLength={100}
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
+              id="privilege-active"
+              name="is_active"
+              type="checkbox"
+              checked={isActive}
+              onChange={(event) => setIsActive(event.target.checked)}
               disabled={creating}
-            />
-          </div>
+            />{' '}
+            Активна
+          </label>
+        </div>
 
-          <div className="field">
-            <label htmlFor="privilege-description">Описание (необязательно)</label>
-            <input
-              id="privilege-description"
-              name="description"
-              type="text"
-              maxLength={500}
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              disabled={creating}
-            />
-          </div>
+        <FormError message={createError === null ? undefined : messageForError(createError)} />
 
-          <div className="field">
-            <label htmlFor="privilege-price">Цена</label>
-            <input
-              id="privilege-price"
-              name="price"
-              type="number"
-              min={1}
-              max={100000}
-              required
-              value={price}
-              onChange={(event) => setPrice(event.target.value)}
-              disabled={creating}
-            />
-          </div>
+        <button type="submit" disabled={creating}>
+          {creating ? 'Создаём…' : 'Добавить позицию'}
+        </button>
+      </form>
 
-          <div className="field">
-            <label htmlFor="privilege-stock">Остаток (пусто — без ограничения)</label>
-            <input
-              id="privilege-stock"
-              name="stock"
-              type="number"
-              min={0}
-              value={stock}
-              onChange={(event) => setStock(event.target.value)}
-              disabled={creating}
-            />
-          </div>
+      {loadError !== null && <ScreenState state="error" error={loadError} onRetry={retry} />}
 
-          <div className="field">
-            <label htmlFor="privilege-active">
-              <input
-                id="privilege-active"
-                name="is_active"
-                type="checkbox"
-                checked={isActive}
-                onChange={(event) => setIsActive(event.target.checked)}
-                disabled={creating}
-              />{' '}
-              Активна
-            </label>
-          </div>
+      {loadError === null && items === null && <ScreenState state="loading" />}
 
-          <FormError message={createError === null ? undefined : messageForError(createError)} />
-
-          <button type="submit" disabled={creating}>
-            {creating ? 'Создаём…' : 'Добавить позицию'}
-          </button>
-        </form>
-
-        {loadError !== null && (
-          <>
-            <FormError message={messageForError(loadError)} />
-            <button type="button" onClick={retry}>
-              Повторить
+      {loadError === null && items !== null && items.length === 0 && (
+        <ScreenState
+          state="empty"
+          message="Позиций пока нет"
+          action={
+            <button type="button" onClick={() => titleInputRef.current?.focus()}>
+              Добавить первую привилегию
             </button>
-          </>
-        )}
+          }
+        />
+      )}
 
-        {loadError === null && items === null && (
-          <p className="page-status" role="status">
-            Загрузка…
-          </p>
-        )}
-
-        {items !== null && items.length === 0 && <p>Позиций пока нет.</p>}
-
-        {items !== null && items.length > 0 && (
-          <ul className="institution-list">
-            {items.map((privilege) => {
-              const edit = edits[privilege.id] ?? toEdit(privilege)
-              const busy = savingId === privilege.id
-              return (
-                <li key={privilege.id} className="institution-item">
-                  <div>
-                    <p className="institution-name">{privilege.title}</p>
-                    {privilege.description !== null && (
-                      <p className="institution-meta">{privilege.description}</p>
-                    )}
-                  </div>
-                  <div className="field">
-                    <label htmlFor={`privilege-price-${privilege.id}`}>Цена</label>
-                    <input
-                      id={`privilege-price-${privilege.id}`}
-                      type="number"
-                      min={1}
-                      max={100000}
-                      value={edit.price}
-                      onChange={(event) => updateEdit(privilege.id, { price: event.target.value })}
-                      disabled={savingId !== null}
-                    />
-                  </div>
-                  <div className="field">
-                    <label htmlFor={`privilege-stock-${privilege.id}`}>Остаток</label>
-                    <input
-                      id={`privilege-stock-${privilege.id}`}
-                      type="number"
-                      min={0}
-                      placeholder="без ограничения"
-                      value={edit.stock}
-                      onChange={(event) => updateEdit(privilege.id, { stock: event.target.value })}
-                      disabled={savingId !== null}
-                    />
-                  </div>
-                  <div className="field">
-                    <label htmlFor={`privilege-active-${privilege.id}`}>
+      {loadError === null && items !== null && items.length > 0 && (
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Название</th>
+                <th scope="col">Цена</th>
+                <th scope="col">Остаток</th>
+                <th scope="col">Активна</th>
+                <th scope="col" />
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((privilege) => {
+                const edit = edits[privilege.id] ?? toEdit(privilege)
+                const busy = savingId === privilege.id
+                return (
+                  <tr key={privilege.id}>
+                    <td>
+                      <p className="institution-name">{privilege.title}</p>
+                      {privilege.description !== null && (
+                        <p className="institution-meta">{privilege.description}</p>
+                      )}
+                    </td>
+                    <td>
+                      <label className="sr-only" htmlFor={`privilege-price-${privilege.id}`}>
+                        Цена
+                      </label>
+                      <input
+                        id={`privilege-price-${privilege.id}`}
+                        type="number"
+                        min={1}
+                        max={100000}
+                        value={edit.price}
+                        onChange={(event) =>
+                          updateEdit(privilege.id, { price: event.target.value })
+                        }
+                        disabled={savingId !== null}
+                      />
+                    </td>
+                    <td>
+                      <label className="sr-only" htmlFor={`privilege-stock-${privilege.id}`}>
+                        Остаток
+                      </label>
+                      <input
+                        id={`privilege-stock-${privilege.id}`}
+                        type="number"
+                        min={0}
+                        placeholder="без ограничения"
+                        value={edit.stock}
+                        onChange={(event) =>
+                          updateEdit(privilege.id, { stock: event.target.value })
+                        }
+                        disabled={savingId !== null}
+                      />
+                    </td>
+                    <td>
+                      <label className="sr-only" htmlFor={`privilege-active-${privilege.id}`}>
+                        Активна
+                      </label>
                       <input
                         id={`privilege-active-${privilege.id}`}
                         type="checkbox"
@@ -280,25 +316,26 @@ export function PrivilegesPage() {
                           updateEdit(privilege.id, { is_active: event.target.checked })
                         }
                         disabled={savingId !== null}
-                      />{' '}
-                      Активна
-                    </label>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void handleSave(privilege)}
-                    disabled={savingId !== null}
-                  >
-                    {busy ? 'Сохраняем…' : 'Сохранить'}
-                  </button>
-                </li>
-              )
-            })}
-          </ul>
-        )}
+                      />
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => void handleSave(privilege)}
+                        disabled={savingId !== null}
+                      >
+                        {busy ? 'Сохраняем…' : 'Сохранить'}
+                      </button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
-        {saveError !== null && <FormError message={messageForError(saveError)} />}
-      </main>
-    </>
+      {saveError !== null && <FormError message={messageForError(saveError)} />}
+    </main>
   )
 }

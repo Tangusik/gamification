@@ -199,4 +199,5 @@ class AcceptInvitation:
             kind=institution.kind,
             role=membership.role,
             status=membership.status,
+            currency_name=institution.currency_name,
         )

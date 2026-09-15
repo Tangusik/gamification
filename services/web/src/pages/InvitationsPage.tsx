@@ -1,8 +1,12 @@
 /**
- * Приглашения одного учреждения: список, создание, отзыв.
+ * Приглашения одного учреждения: список, создание, отзыв, копирование ссылки.
  *
  * Требует, чтобы контекст токена совпадал с `:id` из пути — маршрут защищён
  * `RequireInstitution`, эта страница переключение контекста не делает.
+ *
+ * `institution_admin` видит все приглашения учреждения, `teacher` — только
+ * свои (`ListInvitations` на бэкенде фильтрует по автору сама, F3) — клиент
+ * список не урезает.
  *
  * Название учреждения — из контекста (`useAuth().institution`), а не из
  * `location.state`: так оно не теряется на F5.
@@ -16,11 +20,46 @@ import { useParams } from 'react-router'
 import * as institutionsApi from '../api/institutions'
 import type { InvitationRead } from '../api/institutions'
 import { useAuth } from '../auth/authContext'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { FormError } from '../components/FormError'
+import { PageHeader } from '../components/PageHeader'
+import { SavedNotice } from '../components/SavedNotice'
+import { ScreenState } from '../components/ScreenState'
 import { messageForError } from '../i18n/errorMessages'
 
 function invitationLink(token: string): string {
   return `${window.location.origin}/invite#${token}`
+}
+
+/**
+ * Копирует ссылку в буфер. `navigator.clipboard` доступен только в secure
+ * context — dev открыт по http (риск, знакомый по `randomOperationId`),
+ * поэтому запасной путь — скрытый `textarea` и `document.execCommand('copy')`.
+ */
+async function copyToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator.clipboard?.writeText === 'function') {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      // падаем на запасной путь ниже
+    }
+  }
+  const area = document.createElement('textarea')
+  area.value = text
+  area.style.position = 'fixed'
+  area.style.opacity = '0'
+  document.body.appendChild(area)
+  area.focus()
+  area.select()
+  let ok = false
+  try {
+    ok = document.execCommand('copy')
+  } catch {
+    ok = false
+  }
+  document.body.removeChild(area)
+  return ok
 }
 
 export function InvitationsPage() {
@@ -36,8 +75,12 @@ export function InvitationsPage() {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<unknown>(null)
 
-  const [revokingId, setRevokingId] = useState<string | null>(null)
+  const [revokeTarget, setRevokeTarget] = useState<InvitationRead | null>(null)
+  const [revoking, setRevoking] = useState(false)
   const [revokeError, setRevokeError] = useState<unknown>(null)
+
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [copyError, setCopyError] = useState<string | null>(null)
 
   useEffect(() => {
     if (token === null || id === undefined) return
@@ -77,98 +120,111 @@ export function InvitationsPage() {
     }
   }
 
-  async function handleRevoke(invitationId: string) {
-    if (token === null || id === undefined) return
-    setRevokingId(invitationId)
+  async function handleRevoke() {
+    if (token === null || id === undefined || revokeTarget === null) return
+    setRevoking(true)
     setRevokeError(null)
     try {
-      await institutionsApi.revokeInvitation(token, id, invitationId)
+      await institutionsApi.revokeInvitation(token, id, revokeTarget.id)
+      setRevokeTarget(null)
       retry()
     } catch (caught) {
       setRevokeError(caught)
     } finally {
-      setRevokingId(null)
+      setRevoking(false)
+    }
+  }
+
+  async function handleCopy(invitation: InvitationRead) {
+    setCopyError(null)
+    const ok = await copyToClipboard(invitationLink(invitation.token))
+    if (ok) {
+      setCopiedId(invitation.id)
+      window.setTimeout(() => setCopiedId((current) => (current === invitation.id ? null : current)), 2000)
+    } else {
+      setCopyError('Не удалось скопировать ссылку. Скопируйте вручную.')
     }
   }
 
   return (
-    <>
-      <main className="page">
-        <h1>Приглашения{institutionName !== undefined ? ` — ${institutionName}` : ''}</h1>
+    <main className="page">
+      <PageHeader title="Приглашения" institutionName={institutionName} />
 
-        <form className="form" onSubmit={handleCreate} noValidate>
-          <div className="field">
-            <label htmlFor="invitation-max-uses">Число применений</label>
-            <input
-              id="invitation-max-uses"
-              name="max_uses"
-              type="number"
-              min={1}
-              max={100}
-              required
-              value={maxUses}
-              onChange={(event) => setMaxUses(event.target.value)}
-              disabled={creating}
-            />
-          </div>
+      <form className="form" onSubmit={handleCreate} noValidate>
+        <div className="field">
+          <label htmlFor="invitation-max-uses">Число применений</label>
+          <input
+            id="invitation-max-uses"
+            name="max_uses"
+            type="number"
+            min={1}
+            max={100}
+            required
+            value={maxUses}
+            onChange={(event) => setMaxUses(event.target.value)}
+            disabled={creating}
+          />
+        </div>
 
-          <FormError message={createError === null ? undefined : messageForError(createError)} />
+        <FormError message={createError === null ? undefined : messageForError(createError)} />
 
-          <button type="submit" disabled={creating}>
-            {creating ? 'Создаём…' : 'Создать приглашение'}
-          </button>
-        </form>
+        <button type="submit" disabled={creating}>
+          {creating ? 'Создаём…' : 'Создать ссылку'}
+        </button>
+      </form>
 
-        {loadError !== null && (
-          <>
-            <FormError message={messageForError(loadError)} />
-            <button type="button" onClick={retry}>
-              Повторить
-            </button>
-          </>
-        )}
+      {loadError !== null && <ScreenState state="error" error={loadError} onRetry={retry} />}
+      {loadError === null && items === null && <ScreenState state="loading" />}
+      {loadError === null && items !== null && items.length === 0 && (
+        // Форма создания уже видна выше — второй кнопки в пустом состоянии не нужно.
+        <ScreenState state="empty" message="Приглашений пока нет." />
+      )}
 
-        {loadError === null && items === null && (
-          <p className="page-status" role="status">
-            Загрузка…
-          </p>
-        )}
-
-        {items !== null && items.length === 0 && <p>Приглашений пока нет.</p>}
-
-        {items !== null && items.length > 0 && (
-          <ul className="institution-list">
-            {items.map((invitation) => {
-              const revoked = invitation.revoked_at !== null
-              const busy = revokingId === invitation.id
-              const link = invitationLink(invitation.token)
-              return (
-                <li key={invitation.id} className="institution-item">
+      {items !== null && items.length > 0 && (
+        <ul className="institution-list">
+          {items.map((invitation) => {
+            const revoked = invitation.revoked_at !== null
+            const link = invitationLink(invitation.token)
+            return (
+              <li key={invitation.id} className="institution-item">
+                <div>
+                  <p className="institution-name">{revoked ? <s>{link}</s> : link}</p>
+                  <p className="institution-meta">
+                    Применений: {invitation.uses_count}/{invitation.max_uses} · создано{' '}
+                    {new Date(invitation.created_at).toLocaleString('ru-RU')}
+                    {revoked && ' · отозвано'}
+                  </p>
+                  {copiedId === invitation.id && <SavedNotice show text="Ссылка скопирована" />}
+                </div>
+                {!revoked && (
                   <div>
-                    <p className="institution-name">{revoked ? <s>{link}</s> : link}</p>
-                    <p className="institution-meta">
-                      Применений: {invitation.uses_count}/{invitation.max_uses} · создано{' '}
-                      {new Date(invitation.created_at).toLocaleString()}
-                      {revoked && ' · отозвано'}
-                    </p>
-                  </div>
-                  {!revoked && (
-                    <button
-                      type="button"
-                      onClick={() => void handleRevoke(invitation.id)}
-                      disabled={busy || revokingId !== null}
-                    >
-                      {busy ? 'Отзываем…' : 'Отозвать'}
+                    <button type="button" onClick={() => void handleCopy(invitation)}>
+                      Скопировать ссылку
                     </button>
-                  )}
-                </li>
-              )
-            })}
-          </ul>
-        )}
+                    <button type="button" className="danger" onClick={() => setRevokeTarget(invitation)}>
+                      Отозвать
+                    </button>
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
 
-        {revokeError !== null && <FormError message={messageForError(revokeError)} />}
-      </main>
-    </>
+      {copyError !== null && <FormError message={copyError} />}
+      {revokeError !== null && <FormError message={messageForError(revokeError)} />}
+
+      <ConfirmDialog
+        open={revokeTarget !== null}
+        title="Отозвать приглашение?"
+        description="Ссылка и напечатанный QR перестанут работать."
+        confirmLabel="Отозвать"
+        danger
+        pending={revoking}
+        onConfirm={() => void handleRevoke()}
+        onClose={() => setRevokeTarget(null)}
+      />
+    </main>
   )
 }

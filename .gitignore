@@ -13,3 +13,7 @@ __pycache__/
 .env.*
 !.env.example
 !deploy/.env.production.example
+# Ключ подписи Android и пароли к нему (план 09): только вне репозитория.
+key.properties
+*.jks
+*.keystore

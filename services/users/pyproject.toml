@@ -33,13 +33,16 @@ dependencies = [
     "alembic==1.19.2",
     # Denylist отозванных токенов.
     "redis==8.1.0",
+    # Клиент внутреннего вызова gamification при refresh (план
+    # 10-refresh, У3): рантайм-зависимость, а не только для тестов —
+    # тот же httpx, что использует gamification для вызова users.
+    "httpx==0.28.1",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
-    "httpx==0.28.1",
     "ruff==0.16.6",
 ]
 

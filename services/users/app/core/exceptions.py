@@ -21,7 +21,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.business.domain.errors import (
+    CsrfCheckFailedError,
     DomainError,
+    RefreshTokenInvalidError,
     UserAlreadyExistsError,
     UserNotFoundError,
 )
@@ -79,6 +81,25 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def user_not_found_handler(request: Request, exc: Exception) -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": "USER_NOT_FOUND"})
 
+    async def refresh_token_invalid_handler(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        """Единый код на все причины отказа refresh-токена (план 10-refresh).
+
+        ``no-store``: ответ мог бы содержать (а на успехе — содержит)
+        токен, кешировать такой путь нельзя нигде, включая отказ.
+        """
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "REFRESH_TOKEN_INVALID"},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    async def csrf_check_failed_handler(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        return JSONResponse(status_code=403, content={"detail": "CSRF_CHECK_FAILED"})
+
     async def domain_error_handler(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("Unhandled domain error", exc_info=exc)
         return JSONResponse(status_code=400, content={"detail": "DOMAIN_ERROR"})
@@ -110,5 +131,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(InternalApiError, internal_error_handler)
     app.add_exception_handler(UserAlreadyExistsError, user_already_exists_handler)
     app.add_exception_handler(UserNotFoundError, user_not_found_handler)
+    app.add_exception_handler(RefreshTokenInvalidError, refresh_token_invalid_handler)
+    app.add_exception_handler(CsrfCheckFailedError, csrf_check_failed_handler)
     app.add_exception_handler(DomainError, domain_error_handler)
     app.add_exception_handler(HTTPException, http_exception_handler)

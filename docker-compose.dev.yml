@@ -43,6 +43,22 @@ x-users-env: &users-env
   # users принимает на внутреннем выпуске токена (C1). Значение то же,
   # что GAMIFICATION_USERS_SERVICE_SECRET ниже.
   USERS_INTERNAL_GAMIFICATION_SECRET: "${INTERNAL_GAMIFICATION_SECRET:?INTERNAL_GAMIFICATION_SECRET is required, at least 32 chars, see deploy/.env.example}"
+  # Обратное направление (план 10-refresh, У7): адрес gamification и
+  # секрет, которым users представляется ей на
+  # POST /internal/memberships/resolve. Секрет — то же значение, что
+  # GAMIFICATION_INTERNAL_USERS_SECRET ниже; отдельный от
+  # INTERNAL_GAMIFICATION_SECRET (У7).
+  USERS_GAMIFICATION_INTERNAL_URL: http://gamification:8000
+  USERS_GAMIFICATION_SERVICE_SECRET: "${INTERNAL_USERS_SECRET:?INTERNAL_USERS_SECRET is required, at least 32 chars, see deploy/.env.example}"
+  USERS_REFRESH_REUSE_GRACE_SECONDS: ${USERS_REFRESH_REUSE_GRACE_SECONDS:-30}
+  USERS_REFRESH_WEB_IDLE_DAYS: ${USERS_REFRESH_WEB_IDLE_DAYS:-7}
+  USERS_REFRESH_WEB_ABSOLUTE_DAYS: ${USERS_REFRESH_WEB_ABSOLUTE_DAYS:-30}
+  USERS_REFRESH_MOBILE_IDLE_DAYS: ${USERS_REFRESH_MOBILE_IDLE_DAYS:-30}
+  USERS_REFRESH_MOBILE_ABSOLUTE_DAYS: ${USERS_REFRESH_MOBILE_ABSOLUTE_DAYS:-90}
+  # Риск 2 плана 10-refresh: loopback обычно считается безопасным
+  # контекстом браузерами и без true, но это ещё предстоит проверить
+  # живьём (Ч7) — до тех пор умолчание остаётся тем же, что в проде.
+  USERS_REFRESH_COOKIE_SECURE: ${USERS_REFRESH_COOKIE_SECURE:-true}
 
 x-gamification-env: &gamification-env
   GAMIFICATION_APP_NAME: gamification
@@ -64,6 +80,10 @@ x-gamification-env: &gamification-env
   GAMIFICATION_JWT_ALGORITHM: ${USERS_JWT_ALGORITHM:-RS256}
   GAMIFICATION_USERS_INTERNAL_URL: http://users:8000
   GAMIFICATION_USERS_SERVICE_SECRET: "${INTERNAL_GAMIFICATION_SECRET:?INTERNAL_GAMIFICATION_SECRET is required, at least 32 chars, see deploy/.env.example}"
+  # Обратное направление (план 10-refresh, У7): секрет, которым
+  # gamification проверяет вызовы от users (реализация — Ч2).
+  GAMIFICATION_INTERNAL_USERS_SECRET: "${INTERNAL_USERS_SECRET:?INTERNAL_USERS_SECRET is required, at least 32 chars, see deploy/.env.example}"
+  GAMIFICATION_INTERNAL_USERS_SECRET_PREVIOUS: "${INTERNAL_USERS_SECRET_PREVIOUS:-}"
 
 services:
   postgres:

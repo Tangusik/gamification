@@ -97,6 +97,9 @@ class InstitutionModel(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, nullable=False
     )
+    # Название внутренней валюты учреждения (В5). ``NULL`` — не задано,
+    # без значения по умолчанию: фронт сам показывает запасное слово.
+    currency_name: Mapped[str | None] = mapped_column(String(length=32), nullable=True)
 
 
 class InvitationModel(Base):

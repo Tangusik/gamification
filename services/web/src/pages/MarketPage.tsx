@@ -1,36 +1,48 @@
 /**
- * Маркет — `/institutions/:id/market`, доступно только `student` (У1).
- * Баланс, активные позиции каталога, покупка и список своих покупок.
+ * Маркет — `/institutions/:id/market`.
  *
- * Бэкенда маркета ещё нет — экран собран по контракту плана
- * `.claude/plans/07-market.md` (раздел Ч1), живых проверок не было.
+ * `student` — баланс, покупка с подтверждением и список своих покупок.
+ * `teacher` (В14/б) — только каталог на чтение: без баланса, без покупки и
+ * без «моих покупок» — ни один из связанных вызовов (`GET /me/currency`,
+ * `GET /me/purchases`, `POST /purchases`) для этой роли не делается.
+ * `GET /privileges` открыт обеим ролям (`ListPrivileges`,
+ * `CATALOGUE_VIEW_ROLES` — `app/business/use_cases/market.py`), учителю
+ * сервер отдаёт только активные позиции.
  *
- * `operation_id` покупки создаётся на новую попытку и хранится в `useRef`,
- * пока не придёт окончательный ответ сервера (тот же приём, что у формы
- * начисления в `StudentCurrencyPage`, но per-позиция): при сетевом отказе
- * или таймауте (`ApiError(0, ...)`) повтор идёт с тем же id, при любом
- * ответе сервера — успехе или отказе с кодом — id сбрасывается и следующая
- * попытка получает новый. После `PRICE_CHANGED` каталог перечитывается
- * целиком (вместе с балансом и покупками) — минимальное решение вместо
- * точечной перезагрузки одной позиции.
+ * `operation_id` покупки создаётся на новую попытку и хранится в `useRef` до
+ * окончательного ответа сервера — политика зафиксирована в
+ * `web-service/01-structure.md` («Маркет привилегий»), здесь не меняется:
+ * id сбрасывается только при успехе и при `PRICE_CHANGED` (каталог
+ * перечитывается, следующая попытка уходит с новым id). При любом другом
+ * отказе — `NETWORK_ERROR`, 5xx, `OUT_OF_STOCK`, `INSUFFICIENT_BALANCE`,
+ * `UNKNOWN_ERROR` и т. п. — сервер мог уже закоммитить покупку, поэтому id
+ * не меняется, чтобы повтор той же кнопкой не привёл к двойному списанию.
  */
 import { useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router'
 
 import * as currencyApi from '../api/currency'
 import type { CurrencyAccount } from '../api/currency'
-import { ApiError, NETWORK_ERROR } from '../api/errors'
+import { ApiError } from '../api/errors'
 import * as marketApi from '../api/market'
 import type { Privilege, Purchase } from '../api/market'
 import { useAuth } from '../auth/authContext'
+import { useCurrencyName } from '../auth/useCurrencyName'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { FormError } from '../components/FormError'
+import { Money } from '../components/Money'
+import { PageHeader } from '../components/PageHeader'
+import { ScreenState } from '../components/ScreenState'
 import { messageForError } from '../i18n/errorMessages'
 import { PURCHASE_STATUS_LABELS } from '../i18n/labels'
 import { randomOperationId } from '../utils/uuid'
 
 export function MarketPage() {
   const { id } = useParams<{ id: string }>()
-  const { token } = useAuth()
+  const { token, institution } = useAuth()
+  const currencyName = useCurrencyName()
+
+  const isStudent = institution?.role === 'student'
 
   const [account, setAccount] = useState<CurrencyAccount | null>(null)
   const [accountError, setAccountError] = useState<unknown>(null)
@@ -43,12 +55,15 @@ export function MarketPage() {
 
   const [refreshKey, setRefreshKey] = useState(0)
 
-  const [buyingId, setBuyingId] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Privilege | null>(null)
+  const [buying, setBuying] = useState(false)
   const [buyError, setBuyError] = useState<unknown>(null)
   const pendingOperation = useRef<{ privilegeId: string; operationId: string } | null>(null)
 
+  // Баланс — только у ученика: у преподавателя эндпоинт `/me/currency`
+  // рассчитан на роль `student` и ответит `INSUFFICIENT_ROLE`.
   useEffect(() => {
-    if (token === null || id === undefined) return
+    if (!isStudent || token === null || id === undefined) return
     let cancelled = false
     currencyApi
       .getMyCurrency(token, id)
@@ -61,7 +76,7 @@ export function MarketPage() {
     return () => {
       cancelled = true
     }
-  }, [token, id, refreshKey])
+  }, [isStudent, token, id, refreshKey])
 
   useEffect(() => {
     if (token === null || id === undefined) return
@@ -79,8 +94,9 @@ export function MarketPage() {
     }
   }, [token, id, refreshKey])
 
+  // Свои покупки — тоже только у ученика.
   useEffect(() => {
-    if (token === null || id === undefined) return
+    if (!isStudent || token === null || id === undefined) return
     let cancelled = false
     marketApi
       .listMyPurchases(token, id)
@@ -93,7 +109,7 @@ export function MarketPage() {
     return () => {
       cancelled = true
     }
-  }, [token, id, refreshKey])
+  }, [isStudent, token, id, refreshKey])
 
   function retry() {
     setAccountError(null)
@@ -102,8 +118,19 @@ export function MarketPage() {
     setRefreshKey((value) => value + 1)
   }
 
-  async function handleBuy(privilege: Privilege) {
-    if (token === null || id === undefined || buyingId !== null) return
+  function openConfirm(privilege: Privilege) {
+    setBuyError(null)
+    setSelected(privilege)
+  }
+
+  function closeConfirm() {
+    if (buying) return
+    setSelected(null)
+  }
+
+  async function handleConfirmBuy() {
+    const privilege = selected
+    if (token === null || id === undefined || privilege === null) return
 
     const pending = pendingOperation.current
     const operationId =
@@ -112,7 +139,7 @@ export function MarketPage() {
         : randomOperationId()
     pendingOperation.current = { privilegeId: privilege.id, operationId }
 
-    setBuyingId(privilege.id)
+    setBuying(true)
     setBuyError(null)
     try {
       await marketApi.purchase(token, id, {
@@ -121,112 +148,142 @@ export function MarketPage() {
         expected_price: privilege.price,
       })
       pendingOperation.current = null
+      setSelected(null)
       retry()
     } catch (caught) {
-      // Сетевой отказ или таймаут — сервер решения не вынес, id сохраняется
-      // для повтора. Любой другой ответ (в том числе `PRICE_CHANGED`) —
-      // окончательный, следующая попытка получит новый id.
-      const isNetworkFailure = caught instanceof ApiError && caught.code === NETWORK_ERROR
-      if (!isNetworkFailure) {
-        pendingOperation.current = null
-      }
+      // id сбрасывается только при `PRICE_CHANGED` — каталог перечитывается,
+      // и следующая попытка обязана уйти с новым id. Во всех остальных
+      // случаях (`NETWORK_ERROR`, 5xx, `OUT_OF_STOCK`, `INSUFFICIENT_BALANCE`,
+      // `UNKNOWN_ERROR` и т. п.) сервер мог уже закоммитить покупку — id
+      // сохраняется, чтобы повтор той же кнопкой не привёл к двойному списанию.
       if (caught instanceof ApiError && caught.code === 'PRICE_CHANGED') {
+        pendingOperation.current = null
         retry()
+        setSelected(null)
       }
       setBuyError(caught)
     } finally {
-      setBuyingId(null)
+      setBuying(false)
     }
   }
 
+  const loadError = privilegesError ?? (isStudent ? accountError : null)
+
   return (
-    <>
-      <main className="page">
-        <h1>Маркет</h1>
+    <main className="page">
+      <PageHeader title="Маркет" institutionName={institution?.name} />
 
-        {accountError !== null && <FormError message={messageForError(accountError)} />}
-        {accountError === null && account !== null && (
-          <p>
-            Баланс: <strong>{account.balance}</strong>
-          </p>
-        )}
+      {isStudent && loadError === null && account !== null && (
+        <p className="market-balance">
+          Баланс: <Money amount={account.balance} size={20} /> {currencyName}
+        </p>
+      )}
 
-        {privilegesError !== null && (
-          <>
-            <FormError message={messageForError(privilegesError)} />
-            <button type="button" onClick={retry}>
-              Повторить
-            </button>
-          </>
-        )}
+      {loadError !== null && <ScreenState state="error" error={loadError} onRetry={retry} />}
 
-        {privilegesError === null && privileges === null && (
-          <p className="page-status" role="status">
-            Загрузка…
-          </p>
-        )}
+      {loadError === null && privileges === null && <ScreenState state="loading" />}
 
-        {privileges !== null && privileges.length === 0 && <p>Каталог пока пуст.</p>}
+      {loadError === null && privileges !== null && privileges.length === 0 && (
+        <ScreenState state="empty" message="Учреждение ещё не добавило привилегии" />
+      )}
 
-        {privileges !== null && privileges.length > 0 && (
-          <ul className="institution-list">
-            {privileges.map((privilege) => (
-              <li key={privilege.id} className="institution-item">
+      {loadError === null && privileges !== null && privileges.length > 0 && (
+        <ul className="market-grid">
+          {privileges.map((privilege) => {
+            const outOfStock = privilege.stock !== null && privilege.stock <= 0
+            const shortage =
+              isStudent && account !== null ? privilege.price - account.balance : 0
+            const cannotAfford = isStudent && account !== null && shortage > 0
+
+            let buyLabel = 'Купить'
+            if (outOfStock) buyLabel = 'Нет в наличии'
+            else if (cannotAfford) buyLabel = `Не хватает ${shortage}`
+
+            return (
+              <li key={privilege.id} className="market-card">
                 <div>
-                  <p className="institution-name">
-                    {privilege.title} — {privilege.price}
-                  </p>
+                  <p className="institution-name">{privilege.title}</p>
                   {privilege.description !== null && (
                     <p className="institution-meta">{privilege.description}</p>
                   )}
+                  <p className="market-price">
+                    <Money amount={privilege.price} /> {currencyName}
+                  </p>
                   <p className="institution-meta">
                     {privilege.stock === null ? 'Без ограничения' : `Остаток: ${privilege.stock}`}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void handleBuy(privilege)}
-                  disabled={buyingId !== null || (privilege.stock !== null && privilege.stock <= 0)}
-                >
-                  {buyingId === privilege.id ? 'Покупаем…' : 'Купить'}
-                </button>
+                {isStudent && (
+                  <button
+                    type="button"
+                    onClick={() => openConfirm(privilege)}
+                    disabled={outOfStock || cannotAfford}
+                  >
+                    {buyLabel}
+                  </button>
+                )}
               </li>
-            ))}
-          </ul>
-        )}
+            )
+          })}
+        </ul>
+      )}
 
-        {buyError !== null && <FormError message={messageForError(buyError)} />}
+      {isStudent && (
+        <>
+          <h2>Мои покупки</h2>
 
-        <h2>Мои покупки</h2>
+          {purchasesError !== null && (
+            <ScreenState state="error" error={purchasesError} onRetry={retry} />
+          )}
 
-        {purchasesError !== null && <FormError message={messageForError(purchasesError)} />}
+          {purchasesError === null && purchases === null && <ScreenState state="loading" />}
 
-        {purchasesError === null && purchases === null && (
-          <p className="page-status" role="status">
-            Загрузка…
-          </p>
-        )}
+          {purchasesError === null && purchases !== null && purchases.length === 0 && (
+            <ScreenState state="empty" message="Покупок пока нет" />
+          )}
 
-        {purchases !== null && purchases.length === 0 && <p>Покупок пока нет.</p>}
+          {purchasesError === null && purchases !== null && purchases.length > 0 && (
+            <ul className="institution-list">
+              {purchases.map((item) => (
+                <li key={item.id} className="institution-item">
+                  <div>
+                    <p className="institution-name">
+                      {item.title} — <Money amount={item.price} />
+                    </p>
+                    <p className="institution-meta">
+                      {PURCHASE_STATUS_LABELS[item.status]} ·{' '}
+                      {new Date(item.created_at).toLocaleString('ru-RU')}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
 
-        {purchases !== null && purchases.length > 0 && (
-          <ul className="institution-list">
-            {purchases.map((item) => (
-              <li key={item.id} className="institution-item">
-                <div>
-                  <p className="institution-name">
-                    {item.title} — {item.price}
+          <ConfirmDialog
+            open={selected !== null}
+            title={selected !== null ? `Купить «${selected.title}»?` : ''}
+            description={
+              selected !== null && account !== null ? (
+                <>
+                  <p>
+                    Цена: <Money amount={selected.price} /> {currencyName}
                   </p>
-                  <p className="institution-meta">
-                    {PURCHASE_STATUS_LABELS[item.status]} ·{' '}
-                    {new Date(item.created_at).toLocaleString()}
+                  <p>
+                    Остаток после покупки: <Money amount={account.balance - selected.price} />{' '}
+                    {currencyName}
                   </p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </main>
-    </>
+                  <FormError message={buyError === null ? undefined : messageForError(buyError)} />
+                </>
+              ) : undefined
+            }
+            confirmLabel={buying ? 'Покупаем…' : 'Купить'}
+            pending={buying}
+            onConfirm={() => void handleConfirmBuy()}
+            onClose={closeConfirm}
+          />
+        </>
+      )}
+    </main>
   )
 }

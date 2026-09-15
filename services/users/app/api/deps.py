@@ -15,11 +15,13 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Annotated
 
+import httpx
 from fastapi import Depends, FastAPI, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.auth.user_manager import UserManager
+from app.clients.gamification_memberships import GamificationMembershipsClient
 from app.core.config import get_settings
 from app.repositories.database import create_engine, create_session_factory
 from app.repositories.denylist import (
@@ -28,10 +30,21 @@ from app.repositories.denylist import (
     TokenDenylist,
     create_redis_client,
 )
-from app.repositories.in_memory import InMemoryUserDatabase
-from app.repositories.memory_store import InMemoryUserStore
-from app.repositories.protocols import UserRepository
-from app.repositories.sql_alchemy import SqlAlchemyUserRepository
+from app.repositories.in_memory import (
+    InMemoryRefreshSessionRepository,
+    InMemoryUserDatabase,
+)
+from app.repositories.memory_store import InMemoryRefreshSessionStore, InMemoryUserStore
+from app.repositories.protocols import RefreshSessionRepository, UserRepository
+from app.repositories.sql_alchemy import (
+    SqlAlchemyRefreshSessionRepository,
+    SqlAlchemyUserRepository,
+)
+
+# Таймаут HTTP-вызова в gamification (раздел 4.6 плана 03, тот же, что у
+# gamification → users): ретраев здесь нет, повтор со стороны клиента
+# безопасен, а долгий таймаут превратил бы «недоступна» в подвисший запрос.
+GAMIFICATION_HTTP_TIMEOUT_SECONDS = 2.0
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +127,73 @@ def build_user_db(session: Session) -> UserRepository:
     return SqlAlchemyUserRepository(session)
 
 
+def create_refresh_session_storage(
+    engine: AsyncEngine | None,
+) -> InMemoryRefreshSessionStore | None:
+    """ШОВ: хранилище refresh-сессий в режиме ``memory``, иначе ``None``.
+
+    В режиме PostgreSQL отдельного объекта не заводится — репозиторий
+    строится прямо поверх сессии запроса, как и у пользователей.
+    """
+    if engine is None:
+        return InMemoryRefreshSessionStore()
+    return None
+
+
+def build_refresh_session_repository(
+    session: Session, refresh_storage: InMemoryRefreshSessionStore | None
+) -> RefreshSessionRepository:
+    """ШОВ: сборка адаптера refresh-сессий поверх сессии.
+
+    ``refresh_storage`` заполнен только в режиме ``memory``: там сессия
+    запроса — это глобальное хранилище пользователей, но состояние
+    refresh-сессий живёт отдельно (своя блокировка на сессию), поэтому
+    приходит вторым параметром, а не выводится из ``session``.
+    """
+    if isinstance(session, InMemoryUserStore):
+        assert refresh_storage is not None, (
+            "InMemoryRefreshSessionStore is required when storage_backend=memory"
+        )
+        return InMemoryRefreshSessionRepository(refresh_storage)
+    return SqlAlchemyRefreshSessionRepository(session)
+
+
+async def get_refresh_session_repository(
+    session: Annotated[Session, Depends(get_session)],
+    request: Request,
+) -> RefreshSessionRepository:
+    """ШОВ: провайдер хранилища refresh-сессий для обработчиков запросов."""
+    return build_refresh_session_repository(
+        session, request.app.state.refresh_session_storage
+    )
+
+
+def create_http_client() -> httpx.AsyncClient:
+    """ШОВ: единственный HTTP-клиент приложения, таймаут 2 с.
+
+    По образцу ``create_http_client`` сервиса gamification — тот же
+    подход к единственному клиенту на приложение и тому же таймауту.
+    """
+    return httpx.AsyncClient(timeout=GAMIFICATION_HTTP_TIMEOUT_SECONDS)
+
+
+def create_memberships_client(
+    client: httpx.AsyncClient,
+) -> GamificationMembershipsClient:
+    """ШОВ: адаптер проверки членства в gamification (вопрос 1 = А)."""
+    settings = get_settings()
+    return GamificationMembershipsClient(
+        client,
+        base_url=(settings.gamification_internal_url or "").strip(),
+        service_secret=settings.gamification_service_secret.get_secret_value(),
+    )
+
+
+async def get_memberships_client(request: Request) -> GamificationMembershipsClient:
+    """ШОВ: провайдер клиента gamification для обработчиков запросов."""
+    return request.app.state.memberships_client
+
+
 def create_token_denylist() -> TokenDenylist:
     """ШОВ: создание denylist отозванных токенов.
 
@@ -181,10 +261,15 @@ async def get_user_db(
 
 async def get_user_manager(
     user_db: Annotated[UserRepository, Depends(get_user_db)],
+    refresh_sessions: Annotated[
+        RefreshSessionRepository, Depends(get_refresh_session_repository)
+    ],
 ) -> AsyncGenerator[UserManager]:
     """Провайдер прикладного менеджера пользователей.
 
     Менеджер получает хранилище по псевдониму ``UserRepository``, поэтому
-    смена реализации хранилища его не затрагивает.
+    смена реализации хранилища его не затрагивает. ``refresh_sessions``
+    нужен, чтобы смена пароля могла погасить все сессии пользователя
+    (вопрос 5, план 10-refresh).
     """
-    yield UserManager(user_db)
+    yield UserManager(user_db, refresh_sessions)

@@ -6,7 +6,13 @@
  * текст, а сам код показывается рядом, чтобы его можно было назвать в
  * поддержке.
  */
-import { ApiError, NETWORK_ERROR, UNKNOWN_ERROR, VALIDATION_ERROR } from '../api/errors'
+import {
+  ApiError,
+  NETWORK_ERROR,
+  REFRESH_TOKEN_INVALID,
+  UNKNOWN_ERROR,
+  VALIDATION_ERROR,
+} from '../api/errors'
 
 const MESSAGES: Record<string, string> = {
   // Сеть и общее
@@ -23,6 +29,8 @@ const MESSAGES: Record<string, string> = {
   // Доступ
   Unauthorized: 'Сессия истекла. Войдите заново.',
   AUTH_REQUIRED: 'Сессия истекла. Войдите заново.',
+  [REFRESH_TOKEN_INVALID]: 'Сессия истекла. Войдите заново.',
+  CSRF_CHECK_FAILED: 'Не удалось подтвердить запрос. Обновите страницу и попробуйте ещё раз.',
   INSTITUTION_CONTEXT_REQUIRED: 'Сначала выберите учреждение.',
   NOT_A_MEMBER: 'Учреждение недоступно: членство не активно.',
   INSUFFICIENT_ROLE: 'Недостаточно прав для этого действия.',

@@ -79,6 +79,34 @@ class Settings(BaseSettings):
     # Служебный секрет заголовка X-Service-Secret (C1).
     users_service_secret: SecretStr
 
+    # Служебный секрет обратного направления: users → gamification
+    # (план 10-refresh, У7). Отдельный от ``users_service_secret`` — тот
+    # аутентифицирует gamification перед users, этот наоборот. Общий
+    # секрет на оба направления давал бы утечке одного выдать себя за
+    # любой из двух сервисов. Умолчание — пустая строка, как у users:
+    # в local/test эндпоинт остаётся доступным для запуска без docker,
+    # но тогда любой вызов без заголовка отвергается (пустой секрет
+    # никогда не совпадает, см. ``require_users_caller``).
+    internal_users_secret: SecretStr = SecretStr("")
+    # Второе значение на время ротации: gamification принимает оба
+    # секрета, пока users не переведён на новый. ``None`` — ротация не
+    # идёт.
+    internal_users_secret_previous: SecretStr | None = None
+
+    @field_validator("internal_users_secret_previous", mode="before")
+    @classmethod
+    def _empty_previous_secret_is_none(cls, value: object) -> object:
+        """Считать пустое значение ``_PREVIOUS`` отсутствием ротации (M1).
+
+        Compose передаёт переменную всегда, по умолчанию пустой строкой.
+        Без приведения к ``None`` пустой ``SecretStr`` не проходит проверку
+        длины, и прод-старт падает, а оператор «чинит» его произвольным
+        значением, которое становится вторым действующим секретом.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("root_path")
     @classmethod
     def _normalize_root_path(cls, value: str) -> str:
@@ -152,6 +180,40 @@ class Settings(BaseSettings):
                 "GAMIFICATION_USERS_SERVICE_SECRET must be at least "
                 f"{MIN_SERVICE_SECRET_LENGTH} characters outside of: {allowed}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_internal_users_secret(self) -> Self:
+        """Проверить длину обратного служебного секрета (users → gamification).
+
+        Та же причина и та же граница, что у ``_check_service_secret``:
+        короткое или пустое значение вне ``local``/``test`` роняет старт,
+        а внутри них пустой секрет допустим — тогда любой внутренний
+        вызов отвергается (``SERVICE_AUTH_FAILED``), см.
+        ``require_users_caller`` в ``app/api/internal/internal_router.py``.
+        """
+        secret = self.internal_users_secret.get_secret_value()
+        if (
+            len(secret) < MIN_SERVICE_SECRET_LENGTH
+            and self.environment not in MEMORY_BACKEND_ENVIRONMENTS
+        ):
+            allowed = ", ".join(sorted(MEMORY_BACKEND_ENVIRONMENTS))
+            raise InsecureSettingError(
+                "GAMIFICATION_INTERNAL_USERS_SECRET must be at least "
+                f"{MIN_SERVICE_SECRET_LENGTH} characters outside of: {allowed}"
+            )
+        if self.internal_users_secret_previous is not None:
+            previous = self.internal_users_secret_previous.get_secret_value()
+            if (
+                len(previous) < MIN_SERVICE_SECRET_LENGTH
+                and self.environment not in MEMORY_BACKEND_ENVIRONMENTS
+            ):
+                allowed = ", ".join(sorted(MEMORY_BACKEND_ENVIRONMENTS))
+                raise InsecureSettingError(
+                    "GAMIFICATION_INTERNAL_USERS_SECRET_PREVIOUS must be at "
+                    f"least {MIN_SERVICE_SECRET_LENGTH} characters outside "
+                    f"of: {allowed}"
+                )
         return self
 
 

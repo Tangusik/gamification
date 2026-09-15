@@ -9,6 +9,9 @@ from fastapi import FastAPI
 from app.api.deps import (
     build_user_db,
     create_db_engine,
+    create_http_client,
+    create_memberships_client,
+    create_refresh_session_storage,
     create_token_denylist,
     create_user_storage,
     session_scope,
@@ -38,7 +41,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     engine = create_db_engine()
     app.state.db_engine = engine
     app.state.user_storage = create_user_storage(engine)
+    app.state.refresh_session_storage = create_refresh_session_storage(engine)
     app.state.token_denylist = create_token_denylist()
+    app.state.http_client = create_http_client()
+    app.state.memberships_client = create_memberships_client(app.state.http_client)
 
     try:
         # Сид выполняется только при явно заданных настройках: учётка с
@@ -60,6 +66,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         yield
     finally:
+        await app.state.http_client.aclose()
         await app.state.token_denylist.close()
         if engine is not None:
             await engine.dispose()

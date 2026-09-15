@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router'
 
 import { ApiError } from '../api/errors'
 import { useAuth } from '../auth/authContext'
+import type { FromState } from '../auth/fromLocation'
 import { targetFromState } from '../auth/fromLocation'
 import { FieldError } from '../components/FieldError'
 import { FormError } from '../components/FormError'
@@ -13,6 +14,11 @@ export function RegisterPage() {
   const { register } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
+
+  // Сюда ведёт и неавторизованный переход по ссылке-приглашению
+  // (`RequireAuth`, путь `/invite`). Показываем только факт — сам токен
+  // приглашения (он в `hash` цели) на экран не выводится.
+  const fromInvite = (location.state as FromState | null)?.from?.pathname === '/invite'
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -38,6 +44,11 @@ export function RegisterPage() {
   return (
     <main className="page page-narrow">
       <h1>Регистрация</h1>
+      {fromInvite && (
+        <p className="page-status" role="status">
+          После регистрации приглашение будет принято автоматически.
+        </p>
+      )}
       <form className="form" onSubmit={handleSubmit} noValidate>
         <div className="field">
           <label htmlFor="register-email">Почта</label>

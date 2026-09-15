@@ -23,7 +23,7 @@ type Props = {
 }
 
 export function ChangePasswordForm({ onSuccess, submitLabel = 'Сохранить пароль' }: Props) {
-  const { token, updateUser } = useAuth()
+  const { token, user, login, logout } = useAuth()
 
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -33,7 +33,7 @@ export function ChangePasswordForm({ onSuccess, submitLabel = 'Сохранит�
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (token === null) return
+    if (token === null || user === null) return
     if (password !== confirm) {
       setMismatch(true)
       setError(null)
@@ -44,7 +44,22 @@ export function ChangePasswordForm({ onSuccess, submitLabel = 'Сохранит�
     setError(null)
     try {
       const updated = await authApi.changePassword(token, password)
-      updateUser(updated)
+      // Смена пароля гасит все сессии пользователя, включая текущую (вопрос 5
+      // плана `10-refresh.md`) — прежний access и refresh-cookie уже
+      // недействительны. Входим заново тем же email и только что отправленным
+      // паролем, а не `updateUser(updated)`: без нового `login` следующий
+      // запрос получил бы 401 и разлогинил пользователя, который только что
+      // ввёл новый пароль.
+      try {
+        await login(user.email, password)
+      } catch (loginFailed) {
+        // Пароль сменился на сервере, но новая сессия не поднялась. Оставлять
+        // пользователя с погашенной сессией нельзя — локальный выход;
+        // `RequireAuth` сам уведёт на `/login` по смене статуса на `anon`.
+        await logout()
+        setError(loginFailed)
+        return
+      }
       setPassword('')
       setConfirm('')
       onSuccess(updated)

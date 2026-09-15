@@ -11,9 +11,13 @@ import type { Membership, User, UserRole } from '../api/auth'
 
 /**
  * `loading` — токен ещё проверяется; пока он держится, приложение не шлёт
- * запросов и рисует заглушку.
+ * запросов и рисует заглушку. Старт (`AuthProvider`) всегда начинается с
+ * `loading`: access больше не хранится между перезагрузками (У9), поэтому
+ * узнать `anon`/`authed` можно только запросом `refresh` по cookie. `error`
+ * наружу, за пределы `AuthProvider`, не выходит — это состояние стартового
+ * сетевого сбоя, а не то, с чем должны уметь работать `RequireAuth`/`RequireAnon`.
  */
-export type AuthStatus = 'loading' | 'anon' | 'authed'
+export type AuthStatus = 'loading' | 'anon' | 'authed' | 'error'
 
 /**
  * Активное учреждение: id — из claim токена, роль и название — из свежего
@@ -24,6 +28,12 @@ export type InstitutionContext = {
   id: string
   role: UserRole
   name: string
+  /**
+   * Название внутренней валюты учреждения (В5/б). `null`, пока не задано в
+   * настройках — тогда текст берётся из `useCurrencyName()`
+   * (`src/auth/useCurrencyName.ts`), а не отсюда напрямую.
+   */
+  currencyName: string | null
 }
 
 export type AuthValue = {

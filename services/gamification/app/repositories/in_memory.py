@@ -101,7 +101,7 @@ class InMemoryInstitutionRepository:
         if stored is None:
             return
         self._store.institutions[institution.id] = replace(
-            stored, name=institution.name
+            stored, name=institution.name, currency_name=institution.currency_name
         )
 
 

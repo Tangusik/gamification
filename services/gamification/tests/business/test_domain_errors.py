@@ -25,6 +25,10 @@ from app.business.domain.errors import (
     UsersContractError,
     UsersUnavailableError,
 )
+from app.business.domain.internal_errors import (
+    MembershipNotActiveError,
+    ServiceAuthFailedError,
+)
 from app.core.exceptions import SIMPLE_DOMAIN_ERROR_RESPONSES
 
 EXPECTED = {
@@ -46,6 +50,8 @@ EXPECTED = {
     InsufficientBalanceError: (409, "INSUFFICIENT_BALANCE"),
     PurchaseAlreadyResolvedError: (409, "PURCHASE_ALREADY_RESOLVED"),
     ConcurrentUpdateError: (409, "CONCURRENT_UPDATE"),
+    ServiceAuthFailedError: (401, "SERVICE_AUTH_FAILED"),
+    MembershipNotActiveError: (404, "MEMBERSHIP_NOT_ACTIVE"),
 }
 
 

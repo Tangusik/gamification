@@ -76,7 +76,10 @@ async def test_logout_revokes_token(
     headers = await auth_headers()
     assert (await client.get("/users/me", headers=headers)).status_code == 200
 
-    logout = await client.post("/users/auth/jwt/logout", headers=headers)
+    logout = await client.post(
+        "/users/auth/jwt/logout",
+        headers={**headers, "X-Requested-With": "gamification-web"},
+    )
 
     assert logout.status_code == 204, logout.text
     assert (await client.get("/users/me", headers=headers)).status_code == 401
@@ -96,7 +99,10 @@ async def test_revocation_ttl_does_not_outlive_token(
     use_denylist(denylist)
     headers = await auth_headers()
 
-    await client.post("/users/auth/jwt/logout", headers=headers)
+    await client.post(
+        "/users/auth/jwt/logout",
+        headers={**headers, "X-Requested-With": "gamification-web"},
+    )
 
     assert len(denylist.calls) == 1
     _, ttl_seconds = denylist.calls[0]
@@ -143,7 +149,11 @@ async def test_revoking_one_token_keeps_the_other_alive(
     assert first != second
 
     logout = await client.post(
-        "/users/auth/jwt/logout", headers={"Authorization": f"Bearer {first}"}
+        "/users/auth/jwt/logout",
+        headers={
+            "Authorization": f"Bearer {first}",
+            "X-Requested-With": "gamification-web",
+        },
     )
     assert logout.status_code == 204, logout.text
 

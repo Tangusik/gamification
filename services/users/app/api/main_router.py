@@ -19,9 +19,9 @@
 
 from fastapi import APIRouter
 
+from app.api.external.v1.auth import router as auth_router
 from app.api.external.v1.health import router as health_router
 from app.api.internal.internal_router import router as internal_router
-from app.auth.backend import auth_backend
 from app.auth.users import fastapi_users
 from app.schemas.user import UserCreate, UserRead, UserUpdate
 
@@ -42,9 +42,7 @@ users_router = APIRouter(prefix="/users")
 users_router.include_router(
     fastapi_users.get_users_router(UserRead, UserUpdate), tags=["users"]
 )
-users_router.include_router(
-    fastapi_users.get_auth_router(auth_backend), prefix="/auth/jwt", tags=["auth"]
-)
+users_router.include_router(auth_router, prefix="/auth/jwt", tags=["auth"])
 users_router.include_router(
     fastapi_users.get_register_router(UserRead, UserCreate),
     prefix="/auth",

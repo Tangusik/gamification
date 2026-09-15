@@ -33,6 +33,9 @@ class Institution:
     kind: InstitutionKind
     created_by: uuid.UUID
     created_at: datetime
+    # Название внутренней валюты учреждения (В5). ``None`` — не задано,
+    # фронт показывает запасное слово вместо него.
+    currency_name: str | None = None
 
 
 @dataclass

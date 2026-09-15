@@ -16,6 +16,18 @@ export function decodeInstitutionId(token: string): string | null {
   return typeof value === 'string' ? value : null
 }
 
+/**
+ * Достать `sub` (id пользователя) из access-токена; `null`, если токен не
+ * разобрать. Нужен `performRefresh` (К2 плана `10-refresh.md`), чтобы
+ * заметить смену пользователя за той же refresh-cookie (другая вкладка вошла
+ * другим пользователем) и не смешать его данные с текущей сессией.
+ */
+export function decodeUserId(token: string): string | null {
+  const payload = decodePayload(token)
+  const value = payload?.sub
+  return typeof value === 'string' ? value : null
+}
+
 function decodePayload(token: string): Record<string, unknown> | null {
   const part = token.split('.')[1]
   if (part === undefined) return null

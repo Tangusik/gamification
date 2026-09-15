@@ -35,6 +35,14 @@ export const UNKNOWN_ERROR = 'UNKNOWN_ERROR'
 /** Требуется контекст учреждения — повод увести на выбор учреждения. */
 export const INSTITUTION_CONTEXT_REQUIRED = 'INSTITUTION_CONTEXT_REQUIRED'
 
+/**
+ * 401 на `refresh`/`logout`: один код на все причины отказа refresh-токена
+ * (нет, неизвестен, истёк, отозван, повтор, чужой `client`) — раздел 3
+ * плана `10-refresh.md`. Используется как код `ApiError`, когда `refresh`
+ * вызывается без подключённого обработчика (`client.ts`).
+ */
+export const REFRESH_TOKEN_INVALID = 'REFRESH_TOKEN_INVALID'
+
 type ValidationItem = {
   loc?: unknown[]
   msg?: string

@@ -103,6 +103,44 @@ class Settings(BaseSettings):
     # gamification не переведена на новый. ``None`` — ротация не идёт.
     internal_gamification_secret_previous: SecretStr | None = None
 
+    # Обратное направление (план 10-refresh, У7): секрет, которым users
+    # представляется gamification на ``POST
+    # /internal/memberships/resolve``. Отдельный от
+    # ``internal_gamification_secret`` намеренно — общий секрет на оба
+    # направления позволил бы утечке одного выдать себя за любой из
+    # сервисов. У этого секрета нет своего ``_PREVIOUS``: ротацию
+    # принимающая сторона (gamification, ``_PREVIOUS`` там) — здесь
+    # достаточно единственного текущего значения, которое отправляется,
+    # а не проверяется.
+    gamification_service_secret: SecretStr = SecretStr("")
+    # Адрес gamification для внутренних вызовов. Пусто — обращение
+    # невозможно технически, и refresh обязан обработать это так же, как
+    # недоступность gamification (вопрос 2 = А): без записи в
+    # институт/сеть городить отдельную ошибку конфигурации не за чем —
+    # эффект наружу одинаков.
+    gamification_internal_url: str | None = None
+
+    # Окно повторного предъявления refresh-токена (вопрос 3 = А): токен,
+    # чей преемник ещё не предъявлен, в это окно после использования
+    # проворачивает ротацию ещё раз вместо гашения сессии. Компенсирует
+    # потерянный ответ на мобильной сети (риск 3).
+    refresh_reuse_grace_seconds: int = Field(30, gt=0)
+
+    # Сроки жизни refresh-сессии по типу клиента (вопрос 4 = Б): у веба
+    # короче — общие компьютеры в школах, у мобильного — дольше, это
+    # личное устройство. ``idle`` — скользящее окно простоя, продлевается
+    # каждой успешной ротацией; ``absolute`` фиксируется при создании
+    # сессии и не продлевается никогда.
+    refresh_web_idle_days: int = Field(7, gt=0)
+    refresh_web_absolute_days: int = Field(30, gt=0)
+    refresh_mobile_idle_days: int = Field(30, gt=0)
+    refresh_mobile_absolute_days: int = Field(90, gt=0)
+
+    # ``HttpOnly; SameSite=Strict`` всегда; ``Secure`` — по этой настройке
+    # (У5). ``False`` допустим только в local/test: без TLS в остальных
+    # окружениях cookie с refresh-токеном ушла бы открытым текстом.
+    refresh_cookie_secure: bool = True
+
     # Какая реализация хранилища подключается в ``app/api/deps.py``.
     # Умолчание — ``postgres``: забытая переменная не должна тихо дать
     # хранилище в памяти, теряющее данные при рестарте. ``memory``
@@ -285,6 +323,46 @@ class Settings(BaseSettings):
                     f"least {MIN_SERVICE_SECRET_LENGTH} characters outside "
                     f"of: {allowed}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _check_gamification_service_secret(self) -> Self:
+        """Проверить длину секрета users → gamification (У7).
+
+        Симметрично ``_check_internal_secret``: пустой секрет вне
+        local/test роняет старт, а не тихо шлёт пустой заголовок,
+        который gamification закономерно отвергнет с
+        ``SERVICE_AUTH_FAILED`` — то есть refresh с институтом молча
+        деградировал бы до «gamification недоступна» в проде.
+        """
+        secret = self.gamification_service_secret.get_secret_value()
+        if (
+            len(secret) < MIN_SERVICE_SECRET_LENGTH
+            and self.environment not in MEMORY_BACKEND_ENVIRONMENTS
+        ):
+            allowed = ", ".join(sorted(MEMORY_BACKEND_ENVIRONMENTS))
+            raise InsecureSettingError(
+                "USERS_GAMIFICATION_SERVICE_SECRET must be at least "
+                f"{MIN_SERVICE_SECRET_LENGTH} characters outside of: {allowed}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_refresh_cookie_secure(self) -> Self:
+        """Запретить ``Secure=false`` у refresh-cookie вне local/test.
+
+        Без TLS в остальных окружениях refresh-токен, самый
+        долгоживущий секрет клиента, ушёл бы по HTTP открытым текстом.
+        """
+        if (
+            not self.refresh_cookie_secure
+            and self.environment not in MEMORY_BACKEND_ENVIRONMENTS
+        ):
+            allowed = ", ".join(sorted(MEMORY_BACKEND_ENVIRONMENTS))
+            raise InsecureSettingError(
+                "USERS_REFRESH_COOKIE_SECURE=false is allowed only when "
+                f"USERS_ENVIRONMENT is one of: {allowed}"
+            )
         return self
 
 

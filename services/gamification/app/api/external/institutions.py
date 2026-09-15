@@ -70,6 +70,7 @@ async def list_my_institutions(
             kind=view.kind,
             role=view.role,
             status=view.status,
+            currency_name=view.currency_name,
         )
         for view in views
     ]
@@ -103,6 +104,7 @@ def _to_read(institution: Institution) -> InstitutionRead:
         name=institution.name,
         kind=institution.kind,
         created_at=institution.created_at,
+        currency_name=institution.currency_name,
     )
 
 
@@ -128,11 +130,19 @@ async def update_institution(
     actor: Annotated[Actor, Depends(get_current_actor)],
     use_case: Annotated[UpdateInstitution, Depends(get_update_institution)],
 ) -> InstitutionRead:
-    """Переименовать учреждение — та же валидация, что при создании (Ч2г)."""
+    """Изменить настройки учреждения: имя и/или название валюты (Ч2г, В5).
+
+    Непереданное поле не меняется (``model_fields_set``); значения,
+    какие поля вообще пришли, — забота схемы и use case, обработчик их
+    не интерпретирует.
+    """
+    fields = frozenset(payload.model_fields_set)
     institution = await use_case.execute(
         institution_id=institution_id,
         actor_user_id=actor.user_id,
         actor_institution_id=actor.institution_id,
+        fields=fields,
         name=payload.name,
+        currency_name=payload.currency_name,
     )
     return _to_read(institution)

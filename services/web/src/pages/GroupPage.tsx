@@ -4,27 +4,35 @@
  *
  * Отдельного `GET /groups/{groupId}` в контракте нет — группа берётся из
  * списка `GET /groups`.
+ *
+ * `teacher` получает тот же список (`require_admin_or_teacher` на бэкенде),
+ * но экран здесь read-only: без формы переименования, без удаления и без
+ * управления составом — те же данные, только без кнопок.
  */
 import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router'
 
 import * as groupsApi from '../api/groups'
 import type { Group } from '../api/groups'
+import * as studentsApi from '../api/students'
 import type { InstitutionMember } from '../api/teachers'
 import * as teachersApi from '../api/teachers'
-import * as studentsApi from '../api/students'
 import { useAuth } from '../auth/authContext'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { FormError } from '../components/FormError'
+import { PageHeader } from '../components/PageHeader'
+import { ScreenState } from '../components/ScreenState'
 import { messageForError } from '../i18n/errorMessages'
 
 function memberLabel(member: InstitutionMember): string {
-  return member.display_name ?? member.user_id
+  return member.display_name ?? 'Без имени'
 }
 
 export function GroupPage() {
   const { id, groupId } = useParams<{ id: string; groupId: string }>()
-  const { token } = useAuth()
+  const { token, institution } = useAuth()
   const navigate = useNavigate()
+  const isAdmin = institution?.role === 'institution_admin'
 
   const [groups, setGroups] = useState<Group[] | null>(null)
   const [loadError, setLoadError] = useState<unknown>(null)
@@ -38,6 +46,7 @@ export function GroupPage() {
   const [renaming, setRenaming] = useState(false)
   const [renameError, setRenameError] = useState<unknown>(null)
 
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<unknown>(null)
 
@@ -83,16 +92,18 @@ export function GroupPage() {
         if (!cancelled) setGroupStudents(loaded)
       })
       .catch(() => undefined)
-    studentsApi
-      .listStudents(token, id)
-      .then((loaded) => {
-        if (!cancelled) setAllStudents(loaded)
-      })
-      .catch(() => undefined)
+    if (isAdmin) {
+      studentsApi
+        .listStudents(token, id)
+        .then((loaded) => {
+          if (!cancelled) setAllStudents(loaded)
+        })
+        .catch(() => undefined)
+    }
     return () => {
       cancelled = true
     }
-  }, [token, id, groupId, attempt])
+  }, [token, id, groupId, attempt, isAdmin])
 
   function retry() {
     setGroups(null)
@@ -125,6 +136,7 @@ export function GroupPage() {
     } catch (caught) {
       setDeleteError(caught)
       setDeleting(false)
+      setDeleteOpen(false)
     }
   }
 
@@ -172,6 +184,7 @@ export function GroupPage() {
     }
   }
 
+  // Убрать из группы — без подтверждения (раздел 7, обратимо).
   async function handleRemoveStudent(userId: string) {
     if (token === null || id === undefined || groupId === undefined) return
     setBusyMemberId(userId)
@@ -189,10 +202,12 @@ export function GroupPage() {
   if (loadError !== null) {
     return (
       <main className="page">
-        <FormError message={messageForError(loadError)} />
-        <button type="button" onClick={retry}>
-          Повторить
-        </button>
+        <PageHeader
+          title="Группа"
+          crumbs={[{ label: 'Группы', to: `/institutions/${id}/groups` }]}
+          institutionName={institution?.name}
+        />
+        <ScreenState state="error" error={loadError} onRetry={retry} />
       </main>
     )
   }
@@ -200,9 +215,12 @@ export function GroupPage() {
   if (groups === null) {
     return (
       <main className="page">
-        <p className="page-status" role="status">
-          Загрузка…
-        </p>
+        <PageHeader
+          title="Группа"
+          crumbs={[{ label: 'Группы', to: `/institutions/${id}/groups` }]}
+          institutionName={institution?.name}
+        />
+        <ScreenState state="loading" />
       </main>
     )
   }
@@ -210,6 +228,11 @@ export function GroupPage() {
   if (group === null) {
     return (
       <main className="page">
+        <PageHeader
+          title="Группа"
+          crumbs={[{ label: 'Группы', to: `/institutions/${id}/groups` }]}
+          institutionName={institution?.name}
+        />
         <p>Группа не найдена.</p>
       </main>
     )
@@ -225,42 +248,51 @@ export function GroupPage() {
 
   return (
     <main className="page">
-      <h1>Группа: {group.name}</h1>
+      <PageHeader
+        title={group.name}
+        crumbs={[{ label: 'Группы', to: `/institutions/${id}/groups` }]}
+        institutionName={institution?.name}
+      />
 
-        <form className="form" onSubmit={handleRename} noValidate>
-          <div className="field">
-            <label htmlFor="group-rename">Название</label>
-            <input
-              id="group-rename"
-              name="name"
-              type="text"
-              required
-              maxLength={100}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              disabled={renaming}
-            />
-          </div>
+      {isAdmin && (
+        <>
+          <form className="form" onSubmit={handleRename} noValidate>
+            <div className="field">
+              <label htmlFor="group-rename">Название</label>
+              <input
+                id="group-rename"
+                name="name"
+                type="text"
+                required
+                maxLength={100}
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                disabled={renaming}
+              />
+            </div>
 
-          <FormError message={renameError === null ? undefined : messageForError(renameError)} />
+            <FormError message={renameError === null ? undefined : messageForError(renameError)} />
 
-          <button type="submit" disabled={renaming}>
-            {renaming ? 'Сохраняем…' : 'Переименовать'}
+            <button type="submit" disabled={renaming}>
+              {renaming ? 'Сохраняем…' : 'Переименовать'}
+            </button>
+          </form>
+
+          <button type="button" className="danger" onClick={() => setDeleteOpen(true)} disabled={deleting}>
+            {deleting ? 'Удаляем…' : 'Удалить группу'}
           </button>
-        </form>
+          <FormError message={deleteError === null ? undefined : messageForError(deleteError)} />
+        </>
+      )}
 
-        <button type="button" onClick={() => void handleDelete()} disabled={deleting}>
-          {deleting ? 'Удаляем…' : 'Удалить группу'}
-        </button>
-        <FormError message={deleteError === null ? undefined : messageForError(deleteError)} />
-
-        <h2>Преподаватели</h2>
-        {groupTeachers.length === 0 && <p>В группе нет преподавателей.</p>}
-        {groupTeachers.length > 0 && (
-          <ul className="institution-list">
-            {groupTeachers.map((member) => (
-              <li key={member.user_id} className="institution-item">
-                <p className="institution-name">{memberLabel(member)}</p>
+      <h2>Преподаватели</h2>
+      {groupTeachers.length === 0 && <p>В группе нет преподавателей.</p>}
+      {groupTeachers.length > 0 && (
+        <ul className="institution-list">
+          {groupTeachers.map((member) => (
+            <li key={member.user_id} className="institution-item">
+              <p className="institution-name">{memberLabel(member)}</p>
+              {isAdmin && (
                 <button
                   type="button"
                   onClick={() => void handleRemoveTeacher(member.user_id)}
@@ -268,42 +300,44 @@ export function GroupPage() {
                 >
                   Убрать
                 </button>
-              </li>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {isAdmin && teachers !== null && availableTeachers.length > 0 && (
+        <div className="field">
+          <label htmlFor="add-teacher">Добавить преподавателя</label>
+          <select
+            id="add-teacher"
+            value={addTeacherId}
+            onChange={(event) => setAddTeacherId(event.target.value)}
+          >
+            <option value="">Выберите…</option>
+            {availableTeachers.map((member) => (
+              <option key={member.user_id} value={member.user_id}>
+                {memberLabel(member)}
+              </option>
             ))}
-          </ul>
-        )}
-        {teachers !== null && availableTeachers.length > 0 && (
-          <div className="field">
-            <label htmlFor="add-teacher">Добавить преподавателя</label>
-            <select
-              id="add-teacher"
-              value={addTeacherId}
-              onChange={(event) => setAddTeacherId(event.target.value)}
-            >
-              <option value="">Выберите…</option>
-              {availableTeachers.map((member) => (
-                <option key={member.user_id} value={member.user_id}>
-                  {memberLabel(member)}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => void handleAddTeacher()}
-              disabled={addTeacherId === '' || busyMemberId !== null}
-            >
-              Добавить
-            </button>
-          </div>
-        )}
+          </select>
+          <button
+            type="button"
+            onClick={() => void handleAddTeacher()}
+            disabled={addTeacherId === '' || busyMemberId !== null}
+          >
+            Добавить
+          </button>
+        </div>
+      )}
 
-        <h2>Ученики</h2>
-        {groupStudents !== null && groupStudents.length === 0 && <p>В группе нет учеников.</p>}
-        {groupStudents !== null && groupStudents.length > 0 && (
-          <ul className="institution-list">
-            {groupStudents.map((member) => (
-              <li key={member.user_id} className="institution-item">
-                <p className="institution-name">{memberLabel(member)}</p>
+      <h2>Ученики</h2>
+      {groupStudents !== null && groupStudents.length === 0 && <p>В группе нет учеников.</p>}
+      {groupStudents !== null && groupStudents.length > 0 && (
+        <ul className="institution-list">
+          {groupStudents.map((member) => (
+            <li key={member.user_id} className="institution-item">
+              <p className="institution-name">{memberLabel(member)}</p>
+              {isAdmin && (
                 <button
                   type="button"
                   onClick={() => void handleRemoveStudent(member.user_id)}
@@ -311,36 +345,53 @@ export function GroupPage() {
                 >
                   Убрать
                 </button>
-              </li>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {isAdmin && allStudents !== null && availableStudents.length > 0 && (
+        <div className="field">
+          <label htmlFor="add-student">Добавить ученика</label>
+          <select
+            id="add-student"
+            value={addStudentId}
+            onChange={(event) => setAddStudentId(event.target.value)}
+          >
+            <option value="">Выберите…</option>
+            {availableStudents.map((member) => (
+              <option key={member.user_id} value={member.user_id}>
+                {memberLabel(member)}
+              </option>
             ))}
-          </ul>
-        )}
-        {allStudents !== null && availableStudents.length > 0 && (
-          <div className="field">
-            <label htmlFor="add-student">Добавить ученика</label>
-            <select
-              id="add-student"
-              value={addStudentId}
-              onChange={(event) => setAddStudentId(event.target.value)}
-            >
-              <option value="">Выберите…</option>
-              {availableStudents.map((member) => (
-                <option key={member.user_id} value={member.user_id}>
-                  {memberLabel(member)}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => void handleAddStudent()}
-              disabled={addStudentId === '' || busyMemberId !== null}
-            >
-              Добавить
-            </button>
-          </div>
-        )}
+          </select>
+          <button
+            type="button"
+            onClick={() => void handleAddStudent()}
+            disabled={addStudentId === '' || busyMemberId !== null}
+          >
+            Добавить
+          </button>
+        </div>
+      )}
 
       {memberActionError !== null && <FormError message={messageForError(memberActionError)} />}
+
+      <ConfirmDialog
+        open={deleteOpen}
+        title="Удалить группу?"
+        description={
+          <>
+            Ученики и преподаватели не удаляются, только связь с группой. Учеников в группе:{' '}
+            {groupStudents?.length ?? 0}.
+          </>
+        }
+        confirmLabel="Удалить"
+        danger
+        pending={deleting}
+        onConfirm={() => void handleDelete()}
+        onClose={() => setDeleteOpen(false)}
+      />
     </main>
   )
 }

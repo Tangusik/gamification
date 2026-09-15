@@ -112,6 +112,51 @@ def test_settings_reject_short_service_secret_outside_local(
     assert "too-short" not in str(error.value)
 
 
+def _set_production_env(
+    monkeypatch: pytest.MonkeyPatch, public_key: str, previous: str
+) -> None:
+    """Выставить окружение, в котором проверки длины секретов действуют."""
+    monkeypatch.setenv("GAMIFICATION_ENVIRONMENT", "production")
+    monkeypatch.setenv("GAMIFICATION_STORAGE_BACKEND", "postgres")
+    monkeypatch.setenv(
+        "GAMIFICATION_DATABASE_URL",
+        "postgresql+asyncpg://gamification_app:x@127.0.0.1:1/gamification",
+    )
+    monkeypatch.setenv("GAMIFICATION_REDIS_URL", "redis://127.0.0.1:1/0")
+    monkeypatch.setenv("GAMIFICATION_JWT_PUBLIC_KEY", public_key)
+    monkeypatch.setenv("GAMIFICATION_USERS_SERVICE_SECRET", SERVICE_SECRET)
+    monkeypatch.setenv("GAMIFICATION_INTERNAL_USERS_SECRET", "internal-" + "z" * 32)
+    monkeypatch.setenv("GAMIFICATION_INTERNAL_USERS_SECRET_PREVIOUS", previous)
+
+
+def test_empty_previous_internal_secret_is_no_rotation(
+    monkeypatch: pytest.MonkeyPatch, keypair: tuple[str, str]
+) -> None:
+    """Пустой ``_PREVIOUS`` из compose не роняет прод-старт (M1 ревью Ч3).
+
+    Compose передаёт переменную всегда, по умолчанию пустой строкой.
+    """
+    _, public_key = keypair
+    _set_production_env(monkeypatch, public_key, previous="")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.internal_users_secret_previous is None
+
+
+def test_short_previous_internal_secret_rejected_outside_local(
+    monkeypatch: pytest.MonkeyPatch, keypair: tuple[str, str]
+) -> None:
+    """Короткий непустой ``_PREVIOUS`` вне local/test по-прежнему отвергается."""
+    _, public_key = keypair
+    _set_production_env(monkeypatch, public_key, previous="too-short")
+
+    with pytest.raises(InsecureSettingError) as error:
+        Settings(_env_file=None)
+
+    assert "too-short" not in str(error.value)
+
+
 def test_settings_ignore_env_file_in_cwd(
     tmp_path, monkeypatch: pytest.MonkeyPatch, keypair: tuple[str, str]
 ) -> None:

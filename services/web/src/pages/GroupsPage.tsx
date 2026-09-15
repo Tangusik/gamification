@@ -1,4 +1,11 @@
-/** Группы учреждения — `/institutions/:id/groups`: список и создание. */
+/**
+ * Группы учреждения — `/institutions/:id/groups`: список и создание.
+ *
+ * `institution_admin` — создание и переход в карточку группы. `teacher`
+ * получает тот же `GET /groups` (`require_admin_or_teacher` на бэкенде,
+ * `../../gamification-service/07-currency.md`), но видит только список, без
+ * формы создания — карточка группы для него тоже read-only (`GroupPage`).
+ */
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router'
 
@@ -6,11 +13,14 @@ import * as groupsApi from '../api/groups'
 import type { Group } from '../api/groups'
 import { useAuth } from '../auth/authContext'
 import { FormError } from '../components/FormError'
+import { PageHeader } from '../components/PageHeader'
+import { ScreenState } from '../components/ScreenState'
 import { messageForError } from '../i18n/errorMessages'
 
 export function GroupsPage() {
   const { id } = useParams<{ id: string }>()
-  const { token } = useAuth()
+  const { token, institution } = useAuth()
+  const isAdmin = institution?.role === 'institution_admin'
 
   const [items, setItems] = useState<Group[] | null>(null)
   const [loadError, setLoadError] = useState<unknown>(null)
@@ -59,10 +69,10 @@ export function GroupsPage() {
   }
 
   return (
-    <>
-      <main className="page">
-        <h1>Группы</h1>
+    <main className="page">
+      <PageHeader title="Группы" institutionName={institution?.name} />
 
+      {isAdmin && (
         <form className="form" onSubmit={handleCreate} noValidate>
           <div className="field">
             <label htmlFor="group-name">Название группы</label>
@@ -84,41 +94,31 @@ export function GroupsPage() {
             {creating ? 'Создаём…' : 'Создать группу'}
           </button>
         </form>
+      )}
 
-        {loadError !== null && (
-          <>
-            <FormError message={messageForError(loadError)} />
-            <button type="button" onClick={retry}>
-              Повторить
-            </button>
-          </>
-        )}
+      {loadError !== null && <ScreenState state="error" error={loadError} onRetry={retry} />}
+      {loadError === null && items === null && <ScreenState state="loading" />}
+      {loadError === null && items !== null && items.length === 0 && (
+        // Форма создания уже видна admin над списком — второй кнопки не нужно.
+        <ScreenState state="empty" message="Групп пока нет." />
+      )}
 
-        {loadError === null && items === null && (
-          <p className="page-status" role="status">
-            Загрузка…
-          </p>
-        )}
-
-        {items !== null && items.length === 0 && <p>Групп пока нет.</p>}
-
-        {items !== null && items.length > 0 && (
-          <ul className="institution-list">
-            {items.map((group) => (
-              <li key={group.id} className="institution-item">
-                <div>
-                  <p className="institution-name">
-                    <Link to={`/institutions/${id}/groups/${group.id}`}>{group.name}</Link>
-                  </p>
-                  <p className="institution-meta">
-                    Преподавателей: {group.teacher_ids.length} · учеников: {group.students_count}
-                  </p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </main>
-    </>
+      {items !== null && items.length > 0 && (
+        <ul className="institution-list">
+          {items.map((group) => (
+            <li key={group.id} className="institution-item">
+              <div>
+                <p className="institution-name">
+                  <Link to={`/institutions/${id}/groups/${group.id}`}>{group.name}</Link>
+                </p>
+                <p className="institution-meta">
+                  Преподавателей: {group.teacher_ids.length} · учеников: {group.students_count}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </main>
   )
 }

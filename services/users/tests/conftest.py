@@ -6,6 +6,7 @@
 """
 
 import os
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import asynccontextmanager
 
@@ -20,14 +21,21 @@ from sqlalchemy.pool import NullPool
 from app.auth.backend import build_jwt_strategy
 from app.auth.user_protocol import AppUserProtocol
 from app.business.domain.entities import InstitutionContext, User
+from app.business.ports import RefreshSessionRepository
 from app.core.config import get_settings
 from app.main import create_app
 from app.repositories.database import Base, create_engine, create_session_factory
 from app.repositories.denylist import InMemoryTokenDenylist
-from app.repositories.in_memory import InMemoryUserDatabase
-from app.repositories.memory_store import InMemoryUserStore
+from app.repositories.in_memory import (
+    InMemoryRefreshSessionRepository,
+    InMemoryUserDatabase,
+)
+from app.repositories.memory_store import InMemoryRefreshSessionStore, InMemoryUserStore
 from app.repositories.protocols import UserRepository
-from app.repositories.sql_alchemy import SqlAlchemyUserRepository
+from app.repositories.sql_alchemy import (
+    SqlAlchemyRefreshSessionRepository,
+    SqlAlchemyUserRepository,
+)
 
 
 def generate_keypair() -> tuple[str, str]:
@@ -171,6 +179,33 @@ async def user_db(request: pytest.FixtureRequest) -> AsyncIterator[UserRepositor
     async with postgres_schema(require_test_database_url()) as engine:
         async with create_session_factory(engine)() as session:
             yield SqlAlchemyUserRepository(session)
+
+
+@pytest.fixture(params=["in_memory", POSTGRES_PARAM])
+async def refresh_repo_and_user(
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[tuple[RefreshSessionRepository, uuid.UUID]]:
+    """Реализация ``RefreshSessionRepository`` вместе с валидным ``user_id``.
+
+    Тот же принцип, что у ``user_db``: контрактный файл работает через
+    псевдоним порта и не знает, с какой реализацией имеет дело.
+    PostgreSQL требует существующую строку в ``users`` — внешний ключ
+    ``refresh_sessions.user_id`` иначе не даст создать сессию.
+    """
+    if request.param == "in_memory":
+        yield (
+            InMemoryRefreshSessionRepository(InMemoryRefreshSessionStore()),
+            uuid.uuid4(),
+        )
+        return
+
+    skip_if_incompatible_with_sqlalchemy(request)
+    async with postgres_schema(require_test_database_url()) as engine:
+        async with create_session_factory(engine)() as session:
+            user = await SqlAlchemyUserRepository(session).create(
+                {"email": "refresh-contract@example.com", "hashed_password": "x"}
+            )
+            yield SqlAlchemyRefreshSessionRepository(session), user.id
 
 
 @pytest.fixture(autouse=True)

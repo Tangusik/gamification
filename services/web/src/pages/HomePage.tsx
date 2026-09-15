@@ -17,6 +17,7 @@ import * as groupsApi from '../api/groups'
 import type { Group } from '../api/groups'
 import * as marketApi from '../api/market'
 import { useAuth } from '../auth/authContext'
+import { useCurrencyName } from '../auth/useCurrencyName'
 import { Money } from '../components/Money'
 import { PageHeader } from '../components/PageHeader'
 import { ScreenState } from '../components/ScreenState'
@@ -159,6 +160,7 @@ function TeacherDashboard({ institutionId }: { institutionId: string }) {
 
 function StudentDashboard({ institutionId }: { institutionId: string }) {
   const { token } = useAuth()
+  const currencyName = useCurrencyName()
   const [account, setAccount] = useState<CurrencyAccount | null>(null)
   const [loadError, setLoadError] = useState<unknown>(null)
   const [attempt, setAttempt] = useState(0)
@@ -201,7 +203,10 @@ function StudentDashboard({ institutionId }: { institutionId: string }) {
     <div className="dashboard-grid">
       <div className="dashboard-primary dashboard-card dashboard-balance">
         <p className="dashboard-card-title">БАЛАНС</p>
-        <Money amount={account.balance} size={24} />
+        <p className="dashboard-balance-amount">
+          <Money amount={account.balance} size={24} />
+          <span className="dashboard-balance-currency">{currencyName}</span>
+        </p>
         <DashboardActions
           items={[
             { to: `/institutions/${institutionId}/market`, label: 'В маркет' },

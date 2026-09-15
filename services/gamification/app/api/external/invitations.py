@@ -66,6 +66,7 @@ async def accept_invitation(
         kind=view.kind,
         role=view.role,
         status=view.status,
+        currency_name=view.currency_name,
     )
 
 

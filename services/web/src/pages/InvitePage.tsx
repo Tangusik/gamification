@@ -11,6 +11,16 @@
  *
  * После успеха — кнопка «Перейти в учреждение»: выбирает принятое членство
  * текущим (`selectInstitution`) и уводит на `/`.
+ *
+ * Кроме кнопки, после успешного accept список членств перечитывается сам
+ * (`reloadMemberships`) — иначе принятое приглашение не появится ни в
+ * «Мои учреждения» на `/profile`, ни в автовыборе `AuthProvider`. Если на
+ * момент accept текущего учреждения ещё не было (новый пользователь, только
+ * что зарегистрировавшийся), принятое членство выбирается текущим само —
+ * то же правило автовыбора «единственное активное» (В3), просто вызванное
+ * сразу, а не на следующей перезагрузке. Если текущее учреждение уже есть
+ * (у пользователя было ранее выбранное), оно не трогается — пользователь сам
+ * решает через кнопку ниже.
  */
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
@@ -30,10 +40,14 @@ type Phase =
   | { kind: 'done'; membership: Membership }
 
 export function InvitePage() {
-  const { token, selectInstitution } = useAuth()
+  const { token, institution, selectInstitution, reloadMemberships } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
   const started = useRef(false)
+  // Отдельный флаг от `started`: тот закрывает сам запрос accept (эффект
+  // ниже реагирует на уже готовый результат и StrictMode проигрывает его
+  // дважды тем же порядком).
+  const settled = useRef(false)
 
   const inviteToken = location.hash.startsWith('#') ? location.hash.slice(1) : location.hash
 
@@ -54,6 +68,21 @@ export function InvitePage() {
       .then((membership) => setPhase({ kind: 'done', membership }))
       .catch((error: unknown) => setPhase({ kind: 'error', error }))
   }, [token, inviteToken])
+
+  useEffect(() => {
+    if (phase.kind !== 'done' || settled.current) return
+    settled.current = true
+
+    reloadMemberships()
+    if (institution === null) {
+      // Своего учреждения ещё не было — становимся участником принятого
+      // сразу, без ожидания следующего автовыбора `AuthProvider`.
+      void selectInstitution(phase.membership.institution_id).catch(() => {
+        // Необязательная попытка: не получилось — пользователь всё равно
+        // может нажать «Перейти в учреждение» ниже.
+      })
+    }
+  }, [phase, institution, reloadMemberships, selectInstitution])
 
   async function handleGo(institutionId: string) {
     setGoing(true)

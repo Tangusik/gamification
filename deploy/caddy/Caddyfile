@@ -8,12 +8,13 @@
 # статики и маппинг /api/v1/... на users/gamification по-прежнему
 # делает web, Caddy этого не дублирует.
 #
-# Домен и почта — из переменных окружения CADDY_DOMAIN/CADDY_EMAIL
-# (docker-compose.yml, обязательны через :?). Реальных значений на
-# момент реализации нет — владелец ещё не выбрал домен и почту для
-# Let's Encrypt (см. отчёт C1–C3).
+# Домен и почта — из переменных окружения CADDY_DOMAIN/ACME_EMAIL
+# (docker-compose.yml, обязательны через :?). Домен владелец назвал —
+# your-gamification.ru. Почта — личный контакт владельца для Let's
+# Encrypt: значения в репозитории нет, оно приходит только из
+# deploy/.env.production при деплое (файл игнорируется git).
 {
-	email {$CADDY_EMAIL}
+	email {$ACME_EMAIL}
 }
 
 {$CADDY_DOMAIN} {

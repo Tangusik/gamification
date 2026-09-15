@@ -155,6 +155,7 @@ def _institution_to_domain(row: InstitutionModel) -> Institution:
         kind=row.kind,
         created_by=row.created_by,
         created_at=row.created_at,
+        currency_name=row.currency_name,
     )
 
 
@@ -199,6 +200,7 @@ class SqlAlchemyInstitutionRepository:
                 kind=institution.kind,
                 created_by=institution.created_by,
                 created_at=institution.created_at,
+                currency_name=institution.currency_name,
             )
         )
         await self._session.flush()
@@ -212,6 +214,7 @@ class SqlAlchemyInstitutionRepository:
         if row is None:
             return
         row.name = institution.name
+        row.currency_name = institution.currency_name
         await self._session.flush()
 
 

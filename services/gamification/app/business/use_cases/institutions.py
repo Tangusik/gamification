@@ -20,6 +20,7 @@ class MembershipView:
     kind: InstitutionKind
     role: UserRole
     status: MembershipStatus
+    currency_name: str | None
 
 
 class CreateInstitution:
@@ -76,6 +77,7 @@ class ListMyInstitutions:
                         kind=institution.kind,
                         role=membership.role,
                         status=membership.status,
+                        currency_name=institution.currency_name,
                     )
                 )
             return views

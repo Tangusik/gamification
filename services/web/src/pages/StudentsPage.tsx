@@ -1,35 +1,39 @@
 /**
- * Ученики учреждения — `/institutions/:id/students`: фильтр по группе, имя,
- * группы ученика (добавить/убрать), статус, ссылка на приглашения.
+ * Ученики учреждения — `/institutions/:id/students`: список с балансом,
+ * фильтром по группе и поиском по имени на клиенте. Карточка одного ученика —
+ * `StudentCurrencyPage` (`/institutions/:id/students/:userId`).
+ *
+ * Роли: `institution_admin` — все ученики учреждения; `teacher` — ученики
+ * своих групп (`GET /students?group_id=` фильтрует на сервере, здесь экран
+ * отображает то, что вернул сервер, второй раз не урезает).
+ *
+ * UUID на экран не выводится: только имя («Без имени» — ссылка на карточку
+ * для admin, чтобы задать имя) и баланс.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router'
 
 import * as groupsApi from '../api/groups'
 import type { Group } from '../api/groups'
 import * as studentsApi from '../api/students'
-import type { InstitutionMember } from '../api/students'
+import type { StudentMember } from '../api/students'
 import { useAuth } from '../auth/authContext'
-import { FormError } from '../components/FormError'
-import { messageForError } from '../i18n/errorMessages'
-import { STATUS_LABELS } from '../i18n/labels'
-
-const STATUS_OPTIONS: InstitutionMember['status'][] = ['active', 'suspended']
+import { Money } from '../components/Money'
+import { PageHeader } from '../components/PageHeader'
+import { ScreenState } from '../components/ScreenState'
 
 export function StudentsPage() {
   const { id } = useParams<{ id: string }>()
-  const { token } = useAuth()
+  const { token, institution } = useAuth()
+  const isAdmin = institution?.role === 'institution_admin'
 
   const [groups, setGroups] = useState<Group[] | null>(null)
   const [groupFilter, setGroupFilter] = useState('')
+  const [search, setSearch] = useState('')
 
-  const [items, setItems] = useState<InstitutionMember[] | null>(null)
+  const [items, setItems] = useState<StudentMember[] | null>(null)
   const [loadError, setLoadError] = useState<unknown>(null)
   const [attempt, setAttempt] = useState(0)
-
-  const [busyId, setBusyId] = useState<string | null>(null)
-  const [actionError, setActionError] = useState<unknown>(null)
-  const [addGroupDrafts, setAddGroupDrafts] = useState<Record<string, string>>({})
 
   useEffect(() => {
     if (token === null || id === undefined) return
@@ -62,175 +66,93 @@ export function StudentsPage() {
   }
 
   function groupName(groupId: string): string {
-    return groups?.find((group) => group.id === groupId)?.name ?? groupId
+    return groups?.find((group) => group.id === groupId)?.name ?? '—'
   }
 
-  async function handleStatusChange(member: InstitutionMember, status: InstitutionMember['status']) {
-    if (token === null || id === undefined) return
-    setBusyId(member.user_id)
-    setActionError(null)
-    try {
-      await studentsApi.updateStudent(token, id, member.user_id, { status })
-      retry()
-    } catch (caught) {
-      setActionError(caught)
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  async function handleAddToGroup(member: InstitutionMember) {
-    if (token === null || id === undefined) return
-    const targetGroupId = addGroupDrafts[member.user_id]
-    if (targetGroupId === undefined || targetGroupId === '') return
-    setBusyId(member.user_id)
-    setActionError(null)
-    try {
-      await groupsApi.addStudentToGroup(token, id, targetGroupId, member.user_id)
-      setAddGroupDrafts((prev) => ({ ...prev, [member.user_id]: '' }))
-      retry()
-    } catch (caught) {
-      setActionError(caught)
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  async function handleRemoveFromGroup(member: InstitutionMember, targetGroupId: string) {
-    if (token === null || id === undefined) return
-    setBusyId(member.user_id)
-    setActionError(null)
-    try {
-      await groupsApi.removeStudentFromGroup(token, id, targetGroupId, member.user_id)
-      retry()
-    } catch (caught) {
-      setActionError(caught)
-    } finally {
-      setBusyId(null)
-    }
-  }
+  const filtered = useMemo(() => {
+    if (items === null) return null
+    const query = search.trim().toLowerCase()
+    if (query === '') return items
+    return items.filter((member) => (member.display_name ?? '').toLowerCase().includes(query))
+  }, [items, search])
 
   return (
-    <>
-      <main className="page">
-        <h1>Ученики</h1>
+    <main className="page">
+      <PageHeader title="Ученики" institutionName={institution?.name} />
 
-        <p>
-          <Link to={`/institutions/${id}/invitations`}>Приглашения</Link>
-        </p>
+      <div className="field">
+        <label htmlFor="student-group-filter">Группа</label>
+        <select
+          id="student-group-filter"
+          value={groupFilter}
+          onChange={(event) => setGroupFilter(event.target.value)}
+        >
+          <option value="">Все</option>
+          {(groups ?? []).map((group) => (
+            <option key={group.id} value={group.id}>
+              {group.name}
+            </option>
+          ))}
+        </select>
+      </div>
 
-        <div className="field">
-          <label htmlFor="student-group-filter">Группа</label>
-          <select
-            id="student-group-filter"
-            value={groupFilter}
-            onChange={(event) => setGroupFilter(event.target.value)}
-          >
-            <option value="">Все</option>
-            {(groups ?? []).map((group) => (
-              <option key={group.id} value={group.id}>
-                {group.name}
-              </option>
-            ))}
-          </select>
-        </div>
+      <div className="field">
+        <label htmlFor="student-search">Поиск по имени</label>
+        <input
+          id="student-search"
+          type="text"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Начните вводить имя…"
+        />
+      </div>
 
-        {loadError !== null && (
-          <>
-            <FormError message={messageForError(loadError)} />
-            <button type="button" onClick={retry}>
-              Повторить
-            </button>
-          </>
-        )}
+      {loadError !== null && <ScreenState state="error" error={loadError} onRetry={retry} />}
+      {loadError === null && items === null && <ScreenState state="loading" />}
 
-        {loadError === null && items === null && (
-          <p className="page-status" role="status">
-            Загрузка…
-          </p>
-        )}
+      {loadError === null && items !== null && items.length === 0 && isAdmin && (
+        <ScreenState
+          state="empty"
+          message="Учеников пока нет."
+          action={
+            <Link className="dashboard-action" to={`/institutions/${id}/invitations`}>
+              Создать ссылку-приглашение
+            </Link>
+          }
+        />
+      )}
+      {loadError === null && items !== null && items.length === 0 && !isAdmin && (
+        <ScreenState
+          state="empty"
+          message="В ваших группах нет учеников. Состав групп задаёт администратор."
+        />
+      )}
 
-        {items !== null && items.length === 0 && <p>Учеников пока нет.</p>}
+      {filtered !== null && filtered.length > 0 && (
+        <ul className="institution-list">
+          {filtered.map((member) => (
+            <li key={member.user_id} className="institution-item">
+              <div>
+                <p className="institution-name">
+                  <Link to={`/institutions/${id}/students/${member.user_id}`}>
+                    {member.display_name ?? (isAdmin ? 'Задать имя' : 'Без имени')}
+                  </Link>
+                </p>
+                <p className="institution-meta">
+                  {member.group_ids.length === 0
+                    ? 'без группы'
+                    : member.group_ids.map((groupId) => groupName(groupId)).join(', ')}
+                </p>
+              </div>
+              <Money amount={member.balance} />
+            </li>
+          ))}
+        </ul>
+      )}
 
-        {items !== null && items.length > 0 && (
-          <ul className="institution-list">
-            {items.map((member) => {
-              const busy = busyId === member.user_id
-              const memberGroups = member.group_ids
-              const addableGroups = (groups ?? []).filter(
-                (group) => !memberGroups.includes(group.id),
-              )
-              return (
-                <li key={member.user_id} className="institution-item">
-                  <div>
-                    <p className="institution-name">{member.display_name ?? member.user_id}</p>
-                    <p className="institution-meta">
-                      {memberGroups.length === 0
-                        ? 'без группы'
-                        : memberGroups.map((groupId) => groupName(groupId)).join(', ')}
-                    </p>
-                    {memberGroups.map((groupId) => (
-                      <button
-                        key={groupId}
-                        type="button"
-                        onClick={() => void handleRemoveFromGroup(member, groupId)}
-                        disabled={busy}
-                      >
-                        Убрать из «{groupName(groupId)}»
-                      </button>
-                    ))}
-                    {addableGroups.length > 0 && (
-                      <>
-                        <select
-                          aria-label="Добавить в группу"
-                          value={addGroupDrafts[member.user_id] ?? ''}
-                          onChange={(event) =>
-                            setAddGroupDrafts((prev) => ({
-                              ...prev,
-                              [member.user_id]: event.target.value,
-                            }))
-                          }
-                          disabled={busy}
-                        >
-                          <option value="">Выберите группу…</option>
-                          {addableGroups.map((group) => (
-                            <option key={group.id} value={group.id}>
-                              {group.name}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => void handleAddToGroup(member)}
-                          disabled={busy || (addGroupDrafts[member.user_id] ?? '') === ''}
-                        >
-                          Добавить в группу
-                        </button>
-                      </>
-                    )}
-                  </div>
-                  <select
-                    aria-label="Статус"
-                    value={member.status}
-                    onChange={(event) =>
-                      void handleStatusChange(member, event.target.value as InstitutionMember['status'])
-                    }
-                    disabled={busy}
-                  >
-                    {STATUS_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {STATUS_LABELS[option]}
-                      </option>
-                    ))}
-                  </select>
-                </li>
-              )
-            })}
-          </ul>
-        )}
-
-        {actionError !== null && <FormError message={messageForError(actionError)} />}
-      </main>
-    </>
+      {filtered !== null && filtered.length === 0 && items !== null && items.length > 0 && (
+        <p className="page-status">Никого не нашлось.</p>
+      )}
+    </main>
   )
 }

@@ -23,7 +23,7 @@ from app.auth.denylist import (
     create_redis_client,
 )
 from app.business.ports import Clock, TokenIssuer, UnitOfWork, UserAccounts
-from app.business.use_cases.context import SwitchInstitution
+from app.business.use_cases.context import ResolveMembership, SwitchInstitution
 from app.business.use_cases.currency import (
     CreateAccrual,
     CreateReversal,
@@ -184,6 +184,12 @@ async def get_switch_institution(
     token_issuer: Annotated[TokenIssuer, Depends(get_token_issuer)],
 ) -> SwitchInstitution:
     return SwitchInstitution(uow, token_issuer)
+
+
+async def get_resolve_membership(
+    uow: Annotated[UnitOfWork, Depends(get_uow)],
+) -> ResolveMembership:
+    return ResolveMembership(uow)
 
 
 async def get_create_invitation(

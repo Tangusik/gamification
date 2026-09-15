@@ -217,7 +217,11 @@ async def test_revoked_subject_token_is_rejected(
     """Отозванный (после logout) subject-токен не даёт выпустить новый."""
     token = await get_token(EMAIL, PASSWORD)
     logout = await client.post(
-        "/users/auth/jwt/logout", headers={"Authorization": f"Bearer {token}"}
+        "/users/auth/jwt/logout",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "X-Requested-With": "gamification-web",
+        },
     )
     assert logout.status_code == 204, logout.text
 

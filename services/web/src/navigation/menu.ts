@@ -31,9 +31,9 @@ export function isMenuGroup(entry: MenuEntry): entry is MenuGroup {
 /**
  * Пункты меню для роли в контексте учреждения `institutionId`.
  *
- * «Ученики» ведёт на `…/currency` — временно, до объединения экранов
- * в 08b (карточка ученика с балансом и начислением). Ссылка «Управление
- * учениками» на `…/students` для admin живёт на `CurrencyStudentsPage`.
+ * «Ученики» ведёт на объединённый раздел `…/students` (В4/а: карточка
+ * ученика с балансом, историей и начислением) — страницу делает поток B1
+ * этапа 08b, здесь только ссылка.
  */
 export function getMenuEntries(role: UserRole, institutionId: string): MenuEntry[] {
   const path = (suffix: string) => `/institutions/${institutionId}${suffix}`
@@ -42,7 +42,7 @@ export function getMenuEntries(role: UserRole, institutionId: string): MenuEntry
     case 'institution_admin':
       return [
         { key: 'home', label: 'Главная', to: '/', icon: 'house' },
-        { key: 'students', label: 'Ученики', to: path('/currency'), icon: 'user' },
+        { key: 'students', label: 'Ученики', to: path('/students'), icon: 'user' },
         { key: 'teachers', label: 'Преподаватели', to: path('/teachers'), icon: 'star' },
         { key: 'groups', label: 'Группы', to: path('/groups'), icon: 'chest' },
         { key: 'invitations', label: 'Приглашения', to: path('/invitations'), icon: 'qr' },
@@ -60,11 +60,13 @@ export function getMenuEntries(role: UserRole, institutionId: string): MenuEntry
     case 'teacher':
       return [
         { key: 'home', label: 'Главная', to: '/', icon: 'house' },
-        { key: 'students', label: 'Ученики', to: path('/currency'), icon: 'user' },
+        { key: 'students', label: 'Ученики', to: path('/students'), icon: 'user' },
         { key: 'groups', label: 'Группы', to: path('/groups'), icon: 'chest' },
         { key: 'invitations', label: 'Приглашения', to: path('/invitations'), icon: 'qr' },
-        // Пункта «Маркет» у teacher нет — открытый вопрос В14. Добавить его
-        // назад — правка одной строки здесь.
+        // В14/б (против рекомендации, решение владельца): каталог маркета
+        // виден и преподавателю, но только на чтение — режим «только
+        // чтение» реализует страница (поток B2), меню лишь даёт ссылку.
+        { key: 'market', label: 'Маркет', to: path('/market'), icon: 'coin' },
       ]
     case 'student':
       return [

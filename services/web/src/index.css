@@ -9,8 +9,8 @@
  * - свечение (box-shadow с размытием/text-shadow) — не больше 3–4 объектов на
  *   экране одновременно: держим его на активном пункте меню, карточке баланса
  *   и главной кнопке, не размножаем на каждую карточку списка;
- * - шрифты не подключаются файлами — см. `--font-body`/`--font-pixel` ниже,
- *   реальный источник шрифта решает открытый вопрос В11.
+ * - шрифты — npm-пакеты `@fontsource/*`, подключены в `src/main.tsx` (В11/а
+ *   закрыт); переменные `--font-body`/`--font-pixel` ниже.
  */
 
 :root {
@@ -32,7 +32,11 @@
   --color-danger-soft-strong: rgba(255, 122, 133, 0.22);
   --color-info: #4cc9ff;
 
-  /* Шрифты — только переменные, файлы не подключаем (В11 открыт). */
+  /*
+   * Шрифты подключены npm-пакетами `@fontsource/*` в `src/main.tsx` (В11/а).
+   * Фолбэки в переменных остаются — на случай сбоя загрузки шрифта в
+   * браузере, а не потому что файла нет.
+   */
   --font-body: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-pixel: 'Press Start 2P', ui-monospace, 'Courier New', monospace;
 
@@ -500,6 +504,98 @@ dialog.confirm-dialog::backdrop {
 }
 
 /*
+ * Адаптив меню (В15/а, `.claude/plans/08-web-ux-and-deploy.md`, ответ
+ * закрыт) — граница 1024 px, как в требовании.
+ *
+ * ≥1024 px: `.mobile-topbar` и кнопка «Меню» скрыты, `.sidebar` закреплена
+ * слева в потоке (правила выше). <1024 px: `.sidebar` становится
+ * выезжающей панелью поверх контента, открывается кнопкой «Меню» в
+ * `.mobile-topbar`.
+ */
+.mobile-topbar {
+  display: none;
+}
+
+.menu-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.menu-toggle-icon,
+.menu-toggle-icon::before,
+.menu-toggle-icon::after {
+  display: block;
+  width: 1.125rem;
+  height: 2px;
+  background: currentColor;
+  border-radius: 1px;
+}
+
+.menu-toggle-icon {
+  position: relative;
+}
+
+.menu-toggle-icon::before,
+.menu-toggle-icon::after {
+  content: '';
+  position: absolute;
+  left: 0;
+}
+
+.menu-toggle-icon::before {
+  top: -5px;
+}
+
+.menu-toggle-icon::after {
+  top: 5px;
+}
+
+@media (max-width: 1023px) {
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    background: var(--color-bg);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .mobile-topbar-brand {
+    font-weight: 600;
+    text-decoration: none;
+    color: inherit;
+  }
+
+  .app-shell {
+    align-items: stretch;
+  }
+
+  .sidebar {
+    position: fixed;
+    z-index: 50;
+    top: 0;
+    left: 0;
+    height: 100vh;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    box-shadow: 0 0 32px rgba(0, 0, 0, 0.5);
+  }
+
+  .sidebar-open {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: rgba(8, 8, 17, 0.72);
+  }
+}
+
+/*
  * Дашборд (HomePage, этап 1, раздел 4 плана `08-web-ux-and-deploy.md`).
  *
  * Именованные области готовы принять виджеты этапа 2 (статистика, XP и
@@ -581,6 +677,19 @@ dialog.confirm-dialog::backdrop {
   box-shadow: 0 0 24px var(--color-accent-soft-strong);
 }
 
+.dashboard-balance-amount {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+/* Название валюты учреждения (В5/б) рядом с суммой — сама `Money` его не выводит. */
+.dashboard-balance-currency {
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+}
+
 .dashboard-balance .dashboard-actions {
   margin-top: 0.75rem;
 }
@@ -625,4 +734,97 @@ dialog.confirm-dialog::backdrop {
 
 .profile-section:last-child {
   margin-bottom: 0;
+}
+
+/*
+ * Маркет, история операций, заявки и каталог привилегий (раздел 7 плана
+ * `08-web-ux-and-deploy.md`, этап B2). Таблицы — семантические `<table>` для
+ * списков администратора (Каталог, Заявки): узкая ширина не должна ломать
+ * страницу, прокрутка контейнера допустима вместо переверстки в карточки.
+ */
+.market-balance {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-size: 1.125rem;
+}
+
+.market-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 1rem;
+  padding: 0;
+  margin: 1rem 0;
+  list-style: none;
+}
+
+.market-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.market-price {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  margin: 0.375rem 0;
+  font-weight: 600;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 1rem 0;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+}
+
+.data-table th,
+.data-table td {
+  padding: 0.625rem 0.75rem;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.data-table th {
+  color: var(--color-text-muted);
+  font-weight: 600;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.data-table input[type='number'],
+.data-table input[type='text'] {
+  width: 7rem;
+}
+
+.table-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: nowrap;
+}
+
+/* Доступное имя без визуального текста — подписи ячеек редактируемой таблицы. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

@@ -8,6 +8,7 @@ import { Navigate, Outlet, useLocation } from 'react-router'
 
 import { useAuth } from './authContext'
 import { AuthPending } from './AuthPending'
+import { anonRedirectTarget } from './fromLocation'
 
 /** Путь, с которого редирект на смену пароля не делается — иначе цикл. */
 const CHANGE_PASSWORD_PATH = '/password'
@@ -20,8 +21,11 @@ export function RequireAuth() {
     return <AuthPending />
   }
   if (status === 'anon') {
-    // Цель сохраняем, чтобы после входа вернуть пользователя куда он шёл.
-    return <Navigate to="/login" replace state={{ from: location }} />
+    // Цель сохраняем, чтобы после входа/регистрации вернуть пользователя куда
+    // он шёл — тем же способом, что и раньше: целиком `Location`, включая
+    // `hash` (см. `src/auth/fromLocation.ts`). Адрес входа/регистрации решает
+    // чистая `anonRedirectTarget` — ссылка-приглашение ведёт на регистрацию.
+    return <Navigate to={anonRedirectTarget(location.pathname)} replace state={{ from: location }} />
   }
   if (user?.must_change_password === true && location.pathname !== CHANGE_PASSWORD_PATH) {
     // Временный пароль ещё не сменён: любой защищённый маршрут, кроме самой

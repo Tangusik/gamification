@@ -13,20 +13,28 @@ export type Institution = {
   name: string
   kind: InstitutionKind
   created_at: string
+  /** Название внутренней валюты (В5/б); `null`, пока не задано. */
+  currency_name: string | null
 }
 
 export function getInstitution(token: string, institutionId: string): Promise<Institution> {
   return request<Institution>(`/institutions/${encodeURIComponent(institutionId)}`, { token })
 }
 
+/**
+ * Обновить настройки учреждения. `updates` — только изменяемые поля:
+ * `name` и/или `currency_name` (В5/б, `InstitutionSettingsPage`).
+ * `currency_name: null` явно очищает название валюты — запасное слово тогда
+ * снова берёт `useCurrencyName`.
+ */
 export function updateInstitution(
   token: string,
   institutionId: string,
-  name: string,
+  updates: { name?: string; currency_name?: string | null },
 ): Promise<Institution> {
   return request<Institution>(`/institutions/${encodeURIComponent(institutionId)}`, {
     method: 'PATCH',
-    json: { name },
+    json: updates,
     token,
   })
 }

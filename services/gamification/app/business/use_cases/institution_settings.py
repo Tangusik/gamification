@@ -40,7 +40,15 @@ class GetInstitution:
 
 
 class UpdateInstitution:
-    """Переименовать учреждение — та же валидация, что при создании (Ч2г)."""
+    """Изменить настройки учреждения: имя и/или название валюты (Ч2г, В5).
+
+    Частичное обновление — та же схема, что у ``PATCH /privileges``:
+    ``fields`` (``model_fields_set`` схемы) говорит, какие поля вообще
+    пришли в теле, отсутствие имени в наборе значит «не менять», а не
+    «сбросить». ``currency_name`` умеет обнуляться явным ``null``
+    (``fields`` содержит имя, значение ``None``); ``name`` — нет, это
+    гарантирует схема.
+    """
 
     def __init__(self, uow: UnitOfWork) -> None:
         self._uow = uow
@@ -51,7 +59,9 @@ class UpdateInstitution:
         institution_id: uuid.UUID,
         actor_user_id: uuid.UUID,
         actor_institution_id: uuid.UUID | None,
-        name: str,
+        fields: frozenset[str],
+        name: str | None,
+        currency_name: str | None,
     ) -> Institution:
         async with self._uow as uow:
             scope = await uow.for_institution(institution_id)
@@ -63,7 +73,12 @@ class UpdateInstitution:
             )
             institution = await uow.institutions.get(institution_id)
             assert institution is not None
-            updated = replace(institution, name=name)
+            updated = institution
+            if "name" in fields:
+                assert name is not None
+                updated = replace(updated, name=name)
+            if "currency_name" in fields:
+                updated = replace(updated, currency_name=currency_name)
             await uow.institutions.update(updated)
             await uow.commit()
         return updated

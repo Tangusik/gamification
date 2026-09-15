@@ -10,11 +10,13 @@
  * Страницы сами рендерят свой `<main>` — здесь его нет намеренно, чтобы не
  * задваивать landmark.
  *
- * Адаптив и выезжающее меню для экранов уже 1024 px сюда не закладываются —
- * открытый вопрос В15.
+ * Адаптив (В15/а, ответ закрыт): при ширине <1024 px меню слева превращается
+ * в верхнюю полосу с кнопкой «Меню» и выезжающую панель — правила ниже и в
+ * `src/index.css`, блок «Адаптив меню (В15)». `TopBar` (учреждения нет)
+ * адаптива не требует: полоса и так одна строка с `flex-wrap`.
  */
-import { useState } from 'react'
-import { Link, NavLink, Outlet, useNavigate } from 'react-router'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 
 import { useAuth } from '../auth/authContext'
 import { PixelSprite } from '../components/PixelSprite'
@@ -22,12 +24,21 @@ import { ROLE_LABELS } from '../i18n/labels'
 import { getMenuEntries, isMenuGroup, type MenuLink } from '../navigation/menu'
 import { usePendingPurchasesCount } from '../navigation/usePendingPurchasesCount'
 
-function SidebarLink({ item, badge }: { item: MenuLink; badge?: number | null }) {
+function SidebarLink({
+  item,
+  badge,
+  onNavigate,
+}: {
+  item: MenuLink
+  badge?: number | null
+  onNavigate: () => void
+}) {
   return (
     <NavLink
       to={item.to}
       end={item.to === '/'}
       className={({ isActive }) => `sidebar-link${isActive ? ' sidebar-link-active' : ''}`}
+      onClick={onNavigate}
     >
       <PixelSprite name={item.icon} size={16} />
       <span>{item.label}</span>
@@ -38,7 +49,14 @@ function SidebarLink({ item, badge }: { item: MenuLink; badge?: number | null })
   )
 }
 
-function Sidebar() {
+type SidebarProps = {
+  panelId: string
+  open: boolean
+  /** Переход по пункту закрывает выезжающую панель на узком экране (В15). */
+  onNavigate: () => void
+}
+
+function Sidebar({ panelId, open, onNavigate }: SidebarProps) {
   const { user, institution, token, logout } = useAuth()
   const navigate = useNavigate()
   const [pending, setPending] = useState(false)
@@ -63,8 +81,12 @@ function Sidebar() {
   }
 
   return (
-    <nav className="sidebar" aria-label="Основная навигация">
-      <Link className="sidebar-brand" to="/">
+    <nav
+      id={panelId}
+      className={`sidebar${open ? ' sidebar-open' : ''}`}
+      aria-label="Основная навигация"
+    >
+      <Link className="sidebar-brand" to="/" onClick={onNavigate}>
         Геймификация
       </Link>
 
@@ -82,6 +104,7 @@ function Sidebar() {
                     <SidebarLink
                       item={child}
                       badge={child.key === 'market-purchases' ? pendingCount : undefined}
+                      onNavigate={onNavigate}
                     />
                   </li>
                 ))}
@@ -89,7 +112,7 @@ function Sidebar() {
             </li>
           ) : (
             <li key={entry.key}>
-              <SidebarLink item={entry} />
+              <SidebarLink item={entry} onNavigate={onNavigate} />
             </li>
           ),
         )}
@@ -100,7 +123,7 @@ function Sidebar() {
           <p className="sidebar-institution">{institution.name}</p>
           <p className="sidebar-role">{ROLE_LABELS[institution.role]}</p>
           {user !== null && (
-            <Link className="sidebar-email" to="/profile">
+            <Link className="sidebar-email" to="/profile" onClick={onNavigate}>
               {user.email}
             </Link>
           )}
@@ -146,6 +169,43 @@ function TopBar() {
 
 export function AppLayout() {
   const { institution } = useAuth()
+  const panelId = useId()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const location = useLocation()
+  const [trackedPathname, setTrackedPathname] = useState(location.pathname)
+
+  /**
+   * Закрыть панель. `returnFocus` — вернуть фокус на кнопку «Меню»: так для
+   * Esc и клика по подложке (фокус в этот момент внутри панели или на
+   * подложке), но не для перехода по пункту — там фокус и так уходит на
+   * новую страницу вместе с навигацией, оттягивать его назад на кнопку
+   * не нужно.
+   */
+  const closeMenu = useCallback((returnFocus: boolean) => {
+    setMenuOpen(false)
+    if (returnFocus) menuButtonRef.current?.focus()
+  }, [])
+
+  // Esc закрывает панель, пока она открыта.
+  useEffect(() => {
+    if (!menuOpen) return
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') closeMenu(true)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [menuOpen, closeMenu])
+
+  // Смена маршрута другим способом (например, кнопкой браузера «Назад»)
+  // тоже закрывает панель — без этого она осталась бы открытой поверх новой
+  // страницы на узком экране. Правка состояния прямо при рендере (а не в
+  // `useEffect`) — рекомендованный React-приём для «подгонки состояния под
+  // проп/внешнее значение», без лишнего цикла рендера от эффекта.
+  if (location.pathname !== trackedPathname) {
+    setTrackedPathname(location.pathname)
+    setMenuOpen(false)
+  }
 
   if (institution === null) {
     return (
@@ -157,11 +217,36 @@ export function AppLayout() {
   }
 
   return (
-    <div className="app-shell">
-      <Sidebar />
-      <div className="app-content">
-        <Outlet />
+    <>
+      {/* Верхняя полоса с кнопкой меню — видна только <1024 px (В15/а). */}
+      <div className="mobile-topbar">
+        <Link className="mobile-topbar-brand" to="/">
+          Геймификация
+        </Link>
+        <button
+          type="button"
+          ref={menuButtonRef}
+          className="menu-toggle"
+          aria-expanded={menuOpen}
+          aria-controls={panelId}
+          onClick={() => setMenuOpen((value) => !value)}
+        >
+          <span className="menu-toggle-icon" aria-hidden="true" />
+          <span>Меню</span>
+        </button>
       </div>
-    </div>
+
+      <div className="app-shell">
+        {menuOpen && (
+          // Подложка существует только пока панель открыта; на ≥1024 px
+          // панель и так не выезжает (см. index.css), клика по ней не будет.
+          <div className="sidebar-backdrop" onClick={() => closeMenu(true)} aria-hidden="true" />
+        )}
+        <Sidebar panelId={panelId} open={menuOpen} onNavigate={() => closeMenu(false)} />
+        <div className="app-content">
+          <Outlet />
+        </div>
+      </div>
+    </>
   )
 }

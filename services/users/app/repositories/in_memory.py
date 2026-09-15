@@ -7,14 +7,22 @@
 
 import uuid
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi_users.db import BaseUserDatabase
 
 from app.auth.user_protocol import AppUserProtocol
-from app.business.domain.entities import User
+from app.business.domain.entities import RefreshSession as DomainRefreshSession
+from app.business.domain.entities import (
+    RefreshTokenRecord,
+    User,
+    generate_refresh_token,
+    hash_refresh_token,
+)
 from app.business.domain.errors import UserAlreadyExistsError, UserNotFoundError
-from app.repositories.memory_store import InMemoryUserStore
+from app.repositories.memory_store import InMemoryRefreshSessionStore, InMemoryUserStore
+from app.repositories.protocols import RotationOutcome, RotationResult
 
 
 class InMemoryUserDatabase(BaseUserDatabase[AppUserProtocol, uuid.UUID]):
@@ -103,3 +111,180 @@ class InMemoryUserDatabase(BaseUserDatabase[AppUserProtocol, uuid.UUID]):
         stored = self._store.users.pop(user.id, None)
         if stored is not None:
             self._store.email_index.pop(stored.email.lower(), None)
+
+
+class InMemoryRefreshSessionRepository:
+    """In-memory реализация refresh-сессий (план 10-refresh).
+
+    Ротация сериализуется явной блокировкой на сессию
+    (``InMemoryRefreshSessionStore.lock_for``): один процесс не даёт
+    такой гарантии от event loop даром, а поведение обязано совпадать с
+    SQL-реализацией (``SELECT ... FOR UPDATE``) — оттуда же одинаковый
+    исход гонки двух refresh одним токеном.
+
+    Grace-окно (вопрос 3 = А) вытесняет прежнего преемника, но **не
+    удаляет** его запись (H1, ревью Ч3, исправлено 2026-09-15): он
+    помечается использованным без собственного преемника, и его
+    предъявление уходит в ветку повтора, гася всю сессию целиком —
+    см. докстринг ``SqlAlchemyRefreshSessionRepository`` за подробностями.
+    """
+
+    def __init__(self, store: InMemoryRefreshSessionStore) -> None:
+        self._store = store
+
+    async def create(
+        self,
+        *,
+        user_id: uuid.UUID,
+        client: str,
+        institution_id: uuid.UUID | None,
+        idle_ttl: timedelta,
+        absolute_ttl: timedelta,
+    ) -> tuple[DomainRefreshSession, str]:
+        """См. ``RefreshSessionRepository.create``."""
+        now = datetime.now(UTC)
+        session = DomainRefreshSession(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            client=client,
+            institution_id=institution_id,
+            created_at=now,
+            last_used_at=now,
+            idle_expires_at=now + idle_ttl,
+            absolute_expires_at=now + absolute_ttl,
+        )
+        self._store.sessions[session.id] = session
+
+        raw_token = generate_refresh_token()
+        token_hash = hash_refresh_token(raw_token)
+        self._store.tokens[token_hash] = RefreshTokenRecord(
+            token_hash=token_hash, session_id=session.id, created_at=now
+        )
+        return replace(session), raw_token
+
+    async def find(self, token_hash: str) -> DomainRefreshSession | None:
+        """См. ``RefreshSessionRepository.find``."""
+        token = self._store.tokens.get(token_hash)
+        if token is None:
+            return None
+        session = self._store.sessions.get(token.session_id)
+        if session is None:
+            return None
+        return replace(session)
+
+    async def rotate(
+        self,
+        *,
+        token_hash: str,
+        idle_ttl: timedelta,
+        reuse_grace: timedelta,
+        institution_id: uuid.UUID | None,
+    ) -> RotationResult:
+        """См. ``RefreshSessionRepository.rotate``."""
+        token = self._store.tokens.get(token_hash)
+        if token is None:
+            return RotationResult(RotationOutcome.NOT_FOUND)
+
+        async with self._store.lock_for(token.session_id):
+            # Освежить под блокировкой: конкурентная ротация могла уже
+            # изменить обе записи, пока мы ждали lock.
+            token = self._store.tokens.get(token_hash)
+            if token is None:
+                return RotationResult(RotationOutcome.NOT_FOUND)
+            session = self._store.sessions.get(token.session_id)
+            if session is None or session.revoked_at is not None:
+                return RotationResult(RotationOutcome.NOT_FOUND)
+
+            now = datetime.now(UTC)
+            if session.absolute_expires_at <= now or session.idle_expires_at <= now:
+                return RotationResult(RotationOutcome.NOT_FOUND)
+
+            new_raw = generate_refresh_token()
+            new_hash = hash_refresh_token(new_raw)
+
+            if token.used_at is None:
+                token.used_at = now
+                token.replaced_by_hash = new_hash
+                self._store.tokens[new_hash] = RefreshTokenRecord(
+                    token_hash=new_hash, session_id=session.id, created_at=now
+                )
+                session.last_used_at = now
+                session.idle_expires_at = now + idle_ttl
+                session.institution_id = institution_id
+                return RotationResult(
+                    RotationOutcome.ROTATED, replace(session), new_raw
+                )
+
+            successor = (
+                self._store.tokens.get(token.replaced_by_hash)
+                if token.replaced_by_hash is not None
+                else None
+            )
+            within_grace = (now - token.used_at) <= reuse_grace
+            if successor is not None and successor.used_at is None and within_grace:
+                # Преемник не удаляется (H1, ревью Ч3): помечается
+                # использованным без собственного преемника, поэтому его
+                # предъявление позже попадёт в ветку ниже и погасит сессию.
+                successor.used_at = now
+                token.replaced_by_hash = new_hash
+                self._store.tokens[new_hash] = RefreshTokenRecord(
+                    token_hash=new_hash, session_id=session.id, created_at=now
+                )
+                session.last_used_at = now
+                session.idle_expires_at = now + idle_ttl
+                session.institution_id = institution_id
+                return RotationResult(
+                    RotationOutcome.ROTATED, replace(session), new_raw
+                )
+
+            session.revoked_at = now
+            session.revoke_reason = "reuse"
+            return RotationResult(RotationOutcome.REUSED, replace(session))
+
+    async def release(self) -> None:
+        """См. ``RefreshSessionRepository.release``.
+
+        No-op: in-memory хранилище не открывает отдельной транзакции,
+        закрывать нечего.
+        """
+
+    async def revoke(self, session_id: uuid.UUID, *, reason: str) -> None:
+        """См. ``RefreshSessionRepository.revoke``."""
+        session = self._store.sessions.get(session_id)
+        if session is None:
+            return
+        session.revoked_at = datetime.now(UTC)
+        session.revoke_reason = reason
+
+    async def revoke_for_user(self, user_id: uuid.UUID, *, reason: str) -> None:
+        """См. ``RefreshSessionRepository.revoke_for_user``."""
+        now = datetime.now(UTC)
+        for session in self._store.sessions.values():
+            if session.user_id == user_id and session.revoked_at is None:
+                session.revoked_at = now
+                session.revoke_reason = reason
+
+    async def revoke_by_token(self, token_hash: str, *, reason: str) -> None:
+        """См. ``RefreshSessionRepository.revoke_by_token``."""
+        token = self._store.tokens.get(token_hash)
+        if token is None:
+            return
+        await self.revoke(token.session_id, reason=reason)
+
+    async def delete_expired_for_user(self, user_id: uuid.UUID) -> None:
+        """См. ``RefreshSessionRepository.delete_expired_for_user``."""
+        now = datetime.now(UTC)
+        expired_ids = {
+            session_id
+            for session_id, session in self._store.sessions.items()
+            if session.user_id == user_id
+            and (session.absolute_expires_at <= now or session.idle_expires_at <= now)
+        }
+        for session_id in expired_ids:
+            del self._store.sessions[session_id]
+        for token_hash in [
+            th
+            for th, tok in self._store.tokens.items()
+            if tok.session_id in expired_ids
+        ]:
+            del self._store.tokens[token_hash]

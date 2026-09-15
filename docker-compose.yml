@@ -24,10 +24,22 @@
 # сети compose. web по-прежнему единственный шлюз к /api/v1/...
 # (.claude/knowledge/07-routing.md) — caddy этот маппинг не дублирует.
 #
-# CADDY_DOMAIN и CADDY_EMAIL обязательны через :? — на момент
-# реализации их значений у владельца ещё нет (см. deploy/.env.production.example).
+# CADDY_DOMAIN и ACME_EMAIL обязательны через :?. Домен владелец уже
+# назвал — your-gamification.ru (deploy/.env.production.example).
+# Почта — личный контакт владельца для Let's Encrypt: значения в
+# репозитории нет и быть не должно, вписывается вручную только в
+# deploy/.env.production (файл игнорируется git, см. .gitignore).
 
 name: gamification
+
+# Ротация логов контейнеров (ответ 5, .claude/answers/05-deploy.md): без
+# лимита драйвер json-file пишет без предела и заполняет диск VPS. До
+# 5 файлов по 10 МБ на сервис; смотреть — docker compose logs.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
 
 # Общий набор переменных сервиса: один и тот же для приложения и для
 # шага миграций, потому что alembic читает тот же Settings.
@@ -56,6 +68,24 @@ x-users-env: &users-env
   # users принимает на внутреннем выпуске токена (C1). Значение то же,
   # что GAMIFICATION_USERS_SERVICE_SECRET ниже.
   USERS_INTERNAL_GAMIFICATION_SECRET: "${INTERNAL_GAMIFICATION_SECRET:?INTERNAL_GAMIFICATION_SECRET is required, at least 32 chars, see deploy/.env.example}"
+  # Обратное направление (план 10-refresh, У7): адрес gamification и
+  # секрет, которым users представляется ей на
+  # POST /internal/memberships/resolve. Секрет — то же значение, что
+  # GAMIFICATION_INTERNAL_USERS_SECRET ниже; отдельный от
+  # INTERNAL_GAMIFICATION_SECRET (У7) — общий секрет на оба направления
+  # позволил бы утечке одного выдать себя за любой из сервисов.
+  USERS_GAMIFICATION_INTERNAL_URL: http://gamification:8000
+  USERS_GAMIFICATION_SERVICE_SECRET: "${INTERNAL_USERS_SECRET:?INTERNAL_USERS_SECRET is required, at least 32 chars, see deploy/.env.example}"
+  # Настройки refresh-сессий (вопросы 3 и 4 плана 10-refresh); умолчания
+  # совпадают с решением владельца, переменные — только на случай, если
+  # их понадобится поменять без пересборки образа.
+  USERS_REFRESH_REUSE_GRACE_SECONDS: ${USERS_REFRESH_REUSE_GRACE_SECONDS:-30}
+  USERS_REFRESH_WEB_IDLE_DAYS: ${USERS_REFRESH_WEB_IDLE_DAYS:-7}
+  USERS_REFRESH_WEB_ABSOLUTE_DAYS: ${USERS_REFRESH_WEB_ABSOLUTE_DAYS:-30}
+  USERS_REFRESH_MOBILE_IDLE_DAYS: ${USERS_REFRESH_MOBILE_IDLE_DAYS:-30}
+  USERS_REFRESH_MOBILE_ABSOLUTE_DAYS: ${USERS_REFRESH_MOBILE_ABSOLUTE_DAYS:-90}
+  # true в проде всегда (У5); код сервиса запрещает false вне local/test.
+  USERS_REFRESH_COOKIE_SECURE: ${USERS_REFRESH_COOKIE_SECURE:-true}
 
 # Общий набор переменных сервиса gamification: приложение и одноразовый
 # шаг миграций читают один и тот же Settings. Без depends_on: users —
@@ -79,11 +109,18 @@ x-gamification-env: &gamification-env
   GAMIFICATION_JWT_ALGORITHM: ${USERS_JWT_ALGORITHM:-RS256}
   GAMIFICATION_USERS_INTERNAL_URL: http://users:8000
   GAMIFICATION_USERS_SERVICE_SECRET: "${INTERNAL_GAMIFICATION_SECRET:?INTERNAL_GAMIFICATION_SECRET is required, at least 32 chars, see deploy/.env.example}"
+  # Обратное направление (план 10-refresh, У7): секрет, которым
+  # gamification проверяет вызовы от users на
+  # POST /internal/memberships/resolve (реализация — Ч2). ``_PREVIOUS``
+  # — на время ротации, пусто по умолчанию.
+  GAMIFICATION_INTERNAL_USERS_SECRET: "${INTERNAL_USERS_SECRET:?INTERNAL_USERS_SECRET is required, at least 32 chars, see deploy/.env.example}"
+  GAMIFICATION_INTERNAL_USERS_SECRET_PREVIOUS: "${INTERNAL_USERS_SECRET_PREVIOUS:-}"
 
 services:
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-users}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, see deploy/.env.example}
@@ -114,6 +151,7 @@ services:
   redis:
     image: redis:7.4-alpine
     restart: unless-stopped
+    logging: *default-logging
     # appendonly: denylist переживает рестарт Redis. Потеря denylist не
     # роняет сервис (fail-open), но воскрешает погашенные токены.
     command: ["redis-server", "--appendonly", "yes"]
@@ -137,6 +175,7 @@ services:
     # из entrypoint сервиса намеренно — при нескольких репликах они
     # стартовали бы параллельно; отдельный шаг переносится в k8s как Job.
     restart: "no"
+    logging: *default-logging
     command: ["alembic", "upgrade", "head"]
     environment: *users-env
     depends_on:
@@ -147,6 +186,7 @@ services:
     build: *users-build
     image: gamification/users:${USERS_IMAGE_TAG:-local}
     restart: unless-stopped
+    logging: *default-logging
     environment: *users-env
     # ports нет намеренно: наружу смотрит только web. Сервис доступен
     # по имени users:8000 внутри сети compose — этого достаточно шлюзу.
@@ -168,6 +208,7 @@ services:
       dockerfile: services/gamification/Dockerfile
     image: gamification/gamification:${GAMIFICATION_IMAGE_TAG:-local}
     restart: "no"
+    logging: *default-logging
     command: ["alembic", "upgrade", "head"]
     environment:
       <<: *gamification-env
@@ -184,6 +225,7 @@ services:
     build: *gamification-build
     image: gamification/gamification:${GAMIFICATION_IMAGE_TAG:-local}
     restart: unless-stopped
+    logging: *default-logging
     environment: *gamification-env
     # ports нет намеренно, как и у users: наружу смотрит только web.
     # depends_on: users НЕТ намеренно (раздел 4.6 плана) — иначе
@@ -204,6 +246,7 @@ services:
       context: ./services/web
     image: gamification/web:${WEB_IMAGE_TAG:-local}
     restart: unless-stopped
+    logging: *default-logging
     # ports нет (П12): наружу смотрит только caddy, web доступен внутри
     # сети compose по имени web:80 — этого достаточно caddy.
     depends_on:
@@ -219,6 +262,7 @@ services:
     # меняет поведение при пересборке через полгода после деплоя.
     image: caddy:2.9.1-alpine
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"
@@ -226,9 +270,10 @@ services:
     environment:
       # Обязательны: без домена Caddy не знает, для чего запрашивать
       # сертификат, без почты Let's Encrypt не сможет уведомить об
-      # истечении/проблемах продления.
+      # истечении/проблемах продления. ACME_EMAIL — переменная
+      # оболочки/deploy/.env.production, в репозитории значения нет.
       CADDY_DOMAIN: ${CADDY_DOMAIN:?CADDY_DOMAIN is required (домен для TLS-сертификата), see deploy/.env.production.example}
-      CADDY_EMAIL: ${CADDY_EMAIL:?CADDY_EMAIL is required (почта для Let's Encrypt), see deploy/.env.production.example}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required (контактная почта для Let's Encrypt, впишите в deploy/.env.production — в репозиторий не коммитится), see deploy/.env.production.example}
     volumes:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       # caddy_data — здесь лежат выпущенные сертификаты и их приватные

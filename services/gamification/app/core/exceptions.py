@@ -46,6 +46,10 @@ from app.business.domain.errors import (
     UsersContractError,
     UsersUnavailableError,
 )
+from app.business.domain.internal_errors import (
+    MembershipNotActiveError,
+    ServiceAuthFailedError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +81,9 @@ SIMPLE_DOMAIN_ERROR_RESPONSES: dict[type[DomainError], tuple[int, str]] = {
     # serialization failure — не повреждение данных, а проигрыш гонки за
     # блокировки, клиенту нужно просто повторить запрос.
     ConcurrentUpdateError: (409, "CONCURRENT_UPDATE"),
+    # Внутреннее API (план 10-refresh, Ч2): разрешение членства для users.
+    ServiceAuthFailedError: (401, "SERVICE_AUTH_FAILED"),
+    MembershipNotActiveError: (404, "MEMBERSHIP_NOT_ACTIVE"),
 }
 
 # Код ответа для ошибок доступа. Всё, что не перечислено, — 403.
