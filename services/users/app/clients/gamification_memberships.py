@@ -11,6 +11,14 @@
 ``MEMBERSHIP_NOT_ACTIVE``, 401 ``SERVICE_AUTH_FAILED``, 422 — дефект
 контракта. Все ветки отказа, кроме 404, сведены к одному исходу
 (вопрос 2 = А): вызывающий use case выдаёт access без контекста.
+
+Второй контракт — ``PATCH /internal/memberships/profile-name`` (план
+11-user-name, этап 3): тело ``{user_id, full_name}``, 200
+``{updated}``, 401 — секрет не принят, 422 — дефект контракта.
+Синхронизация профильного имени best-effort (решение ведущего задачи):
+любой отказ сведён к одному исключению, а вызывающий (``UserManager``)
+обязан его перехватить и не прерывать ``PATCH /users/me`` — см.
+докстринг ``UserManager.on_after_update``.
 """
 
 import logging
@@ -26,6 +34,7 @@ from app.business.domain.errors import (
 logger = logging.getLogger(__name__)
 
 RESOLVE_PATH = "/internal/memberships/resolve"
+SYNC_PROFILE_NAME_PATH = "/internal/memberships/profile-name"
 
 
 class GamificationMembershipsClient:
@@ -85,6 +94,51 @@ class GamificationMembershipsClient:
         # конкретному пользователю (вопрос 2 = А).
         logger.error(
             "Membership check was rejected or failed: status=%s",
+            response.status_code,
+        )
+        raise MembershipCheckUnavailableError
+
+    async def sync_profile_name(
+        self, *, user_id: uuid.UUID, full_name: str | None
+    ) -> int:
+        """Разослать новое профильное имя по всем членствам пользователя.
+
+        Best-effort: любая ветка отказа сведена к одному исключению
+        ``MembershipCheckUnavailableError`` — вызывающий (``UserManager``)
+        обязан его перехватить, см. докстринг модуля. Имя пользователя в
+        лог не попадает ни при успехе, ни при отказе — только код ответа.
+        """
+        try:
+            response = await self._client.patch(
+                f"{self._base_url}{SYNC_PROFILE_NAME_PATH}",
+                json={"user_id": str(user_id), "full_name": full_name},
+                headers={"X-Service-Secret": self._service_secret},
+            )
+        except (httpx.HTTPError, httpx.InvalidURL):
+            # См. комментарий в ``resolve_role``: та же причина для той же
+            # пары исключений.
+            logger.error("Gamification profile-name sync is unreachable", exc_info=True)
+            raise MembershipCheckUnavailableError from None
+
+        if response.status_code == 200:
+            try:
+                body = response.json()
+                updated = body["updated"]
+                if not isinstance(updated, int) or isinstance(updated, bool):
+                    raise ValueError("updated is not an int")
+            except (ValueError, KeyError, TypeError):
+                logger.error(
+                    "Gamification returned a 200 response with a malformed "
+                    "body: status=%s",
+                    response.status_code,
+                )
+                raise MembershipCheckUnavailableError from None
+            return updated
+
+        # 401 (секрет не принят), 422 (дефект контракта) и любой другой
+        # неожиданный статус — один и тот же исход для вызывающего.
+        logger.error(
+            "Profile-name sync was rejected or failed: status=%s",
             response.status_code,
         )
         raise MembershipCheckUnavailableError

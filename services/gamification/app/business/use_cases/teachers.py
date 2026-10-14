@@ -48,9 +48,13 @@ class CreateTeacher:
                 actor_institution_id=actor_institution_id,
             )
 
-        # Шаг 2: вызов users без открытой транзакции БД.
+        # Шаг 2: вызов users без открытой транзакции БД. Имя пишется
+        # в users как full_name (план 11, этап 2) — у преподавателя
+        # ещё нет профиля, и так он получает профильное имя сразу; в
+        # членстве это же имя остаётся накладкой display_name (п. 4
+        # «что учесть» плана), а не копией в profile_name.
         new_user_id = await self._user_accounts.create_account(
-            email=email, password=password
+            email=email, password=password, full_name=display_name
         )
 
         # Шаг 3: вставка членства и коммит. Сбой здесь оставляет аккаунт
@@ -80,10 +84,11 @@ class CreateTeacher:
 
         return MemberView(
             user_id=membership.user_id,
-            display_name=membership.display_name,
+            display_name=membership.effective_name,
             status=membership.status,
             created_at=membership.created_at,
             group_ids=[],
+            display_name_override=membership.display_name,
         )
 
 
@@ -161,8 +166,9 @@ class UpdateTeacher:
 def _to_view(membership: Membership, group_ids: list[uuid.UUID]) -> MemberView:
     return MemberView(
         user_id=membership.user_id,
-        display_name=membership.display_name,
+        display_name=membership.effective_name,
         status=membership.status,
         created_at=membership.created_at,
         group_ids=group_ids,
+        display_name_override=membership.display_name,
     )

@@ -19,6 +19,7 @@ from app.business.use_cases.invitations import AcceptInvitation, CreateInvitatio
 from app.business.use_cases.students import ListStudents, UpdateStudent
 from app.repositories.in_memory import InMemoryStore
 from app.repositories.uow import InMemoryUnitOfWork
+from tests.business.conftest import NullUserAccounts
 
 
 class FixedClock:
@@ -45,7 +46,7 @@ def clock() -> FixedClock:
 
 
 async def _create_institution(uow: InMemoryUnitOfWork, clock: FixedClock, admin_id):
-    return await CreateInstitution(uow, clock).execute(
+    return await CreateInstitution(uow, clock, NullUserAccounts()).execute(
         name="Школа №1", kind=InstitutionKind.SCHOOL, created_by=admin_id
     )
 
@@ -57,7 +58,7 @@ async def _invite_student(uow, clock, institution_id, admin_id, student_id):
         actor_institution_id=institution_id,
         max_uses=1,
     )
-    await AcceptInvitation(uow, clock).execute(
+    await AcceptInvitation(uow, clock, NullUserAccounts()).execute(
         user_id=student_id, token=invitation.token
     )
 

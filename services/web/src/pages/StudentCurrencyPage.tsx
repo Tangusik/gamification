@@ -327,8 +327,8 @@ export function StudentCurrencyPage() {
                 id="student-name"
                 type="text"
                 maxLength={100}
-                placeholder="Без имени"
-                defaultValue={student.display_name ?? ''}
+                placeholder="Имя из профиля"
+                defaultValue={student.display_name_override ?? ''}
                 disabled={savingName}
               />
               <button type="button" onClick={() => void handleSaveName()} disabled={savingName}>

@@ -401,6 +401,21 @@ class UserMemberships(Protocol):
         """Вернуть все членства пользователя во всех учреждениях."""
         ...
 
+    async def set_profile_name(self, user_id: uuid.UUID, full_name: str | None) -> int:
+        """Обновить ``profile_name`` во всех членствах пользователя сразу.
+
+        Межарендная операция (план 11, этап 3): users сообщает о смене
+        имени в профиле, не зная, в каких учреждениях состоит
+        пользователь, поэтому ``for_institution(...)`` здесь не
+        подходит — метод сам обходит все учреждения через ``user_id``.
+        ``full_name=None`` — сброс профильного имени (пользователь очистил
+        его в users).
+
+        Возвращает число обновлённых членств; 0 — у пользователя их нет
+        (не ошибка, план 11).
+        """
+        ...
+
 
 class InvitationLookup(Protocol):
     """Межарендная операция: поиск приглашения по токену при принятии (H1).
@@ -473,11 +488,27 @@ class TokenIssuer(Protocol):
 class UserAccounts(Protocol):
     """Порт создания аккаунтов в users (В1/А1, раздел «Ч2» плана)."""
 
-    async def create_account(self, *, email: str, password: str) -> uuid.UUID:
+    async def create_account(
+        self, *, email: str, password: str, full_name: str | None = None
+    ) -> uuid.UUID:
         """Завести аккаунт в users и вернуть его ``user_id``.
+
+        ``full_name`` (план 11, этап 2) — заполняется только там, где у
+        человека ещё нет профиля (``POST /teachers``): новый аккаунт
+        сразу получает профильное имя.
 
         :raises EmailAlreadyRegisteredError: email уже занят (В2/B3).
         :raises InvalidPasswordError: users отверг пароль.
+        :raises UsersUnavailableError: users недоступен, не ответил
+            вовремя или отверг служебный секрет вызывающего.
+        :raises UsersContractError: users ответил не по контракту.
+        """
+        ...
+
+    async def get_full_name(self, user_id: uuid.UUID) -> str | None:
+        """Вернуть профильное имя пользователя (план 11, этап 2) или
+        ``None`` — пользователя нет или имя не заполнено.
+
         :raises UsersUnavailableError: users недоступен, не ответил
             вовремя или отверг служебный секрет вызывающего.
         :raises UsersContractError: users ответил не по контракту.

@@ -2,12 +2,15 @@
 
 import logging
 import uuid
+from typing import Any
 
 from fastapi import Request
 from fastapi_users import BaseUserManager, InvalidPasswordException, UUIDIDMixin
 from fastapi_users import exceptions as fastapi_users_exceptions
 
 from app.auth.user_protocol import AppUserProtocol
+from app.business.domain.errors import MembershipCheckUnavailableError
+from app.clients.gamification_memberships import GamificationMembershipsClient
 from app.core.config import MIN_PASSWORD_LENGTH
 from app.repositories.protocols import RefreshSessionRepository, UserRepository
 from app.schemas.user import UserCreate, UserUpdate
@@ -39,15 +42,21 @@ class UserManager(UUIDIDMixin, BaseUserManager[AppUserProtocol, uuid.UUID]):
     ``POST /internal/users``), заводить там фиктивный репозиторий не за
     чем. Смена пароля гасит все refresh-сессии пользователя (вопрос 5,
     план 10-refresh) — только если репозиторий передан.
+
+    ``memberships_client`` опционален по той же причине: заведение
+    аккаунта через ``POST /internal/users`` не проходит через
+    ``on_after_update`` вовсе, синхронизировать там нечего.
     """
 
     def __init__(
         self,
         user_db: UserRepository,
         refresh_sessions: RefreshSessionRepository | None = None,
+        memberships_client: GamificationMembershipsClient | None = None,
     ) -> None:
         super().__init__(user_db)
         self._refresh_sessions = refresh_sessions
+        self._memberships_client = memberships_client
 
     async def validate_password(
         self, password: str, user: UserCreate | AppUserProtocol
@@ -133,6 +142,40 @@ class UserManager(UUIDIDMixin, BaseUserManager[AppUserProtocol, uuid.UUID]):
                 updated_user, {"must_change_password": False}
             )
         return updated_user
+
+    async def on_after_update(
+        self,
+        user: AppUserProtocol,
+        update_dict: dict[str, Any],
+        request: Request | None = None,
+    ) -> None:
+        """Разослать новое ``full_name`` в gamification при его смене.
+
+        ``update_dict`` — результат ``create_update_dict()`` с
+        ``exclude_unset=True``: ключ ``"full_name"`` в нём означает, что
+        поле действительно пришло в теле запроса (а не просто равно
+        ``None`` по умолчанию) — этим отличается смена пароля без имени
+        от явного сброса имени в ``null``.
+
+        Синхронизация best-effort (решение ведущего задачи, план
+        11-user-name, этап 3): ``PATCH /users/me`` на этот момент уже
+        выполнен успешно и имя сохранено в users — источнике истины, —
+        поэтому недоступность или отказ gamification не должны ни
+        откатывать, ни блокировать ответ пользователю. Если
+        синхронизация не удалась, кэш имени в членствах отстаёт до
+        следующей смены имени — сознательный компромисс, а не
+        недосмотр. Само имя в лог не попадает.
+        """
+        if "full_name" not in update_dict or self._memberships_client is None:
+            return
+        try:
+            await self._memberships_client.sync_profile_name(
+                user_id=user.id, full_name=user.full_name
+            )
+        except MembershipCheckUnavailableError:
+            logger.error(
+                "Profile name sync to gamification failed: user_id=%s", user.id
+            )
 
     async def create(
         self,

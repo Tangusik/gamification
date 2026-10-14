@@ -61,6 +61,7 @@ from app.business.use_cases.market import (
     RejectPurchase,
     UpdatePrivilege,
 )
+from app.business.use_cases.profile_names import SyncProfileName
 from app.business.use_cases.students import ListStudents, UpdateStudent
 from app.business.use_cases.teachers import CreateTeacher, ListTeachers, UpdateTeacher
 from app.clients.users_accounts import UsersAccounts
@@ -169,8 +170,9 @@ async def get_user_accounts(request: Request) -> UserAccounts:
 async def get_create_institution(
     uow: Annotated[UnitOfWork, Depends(get_uow)],
     clock: Annotated[Clock, Depends(get_clock)],
+    user_accounts: Annotated[UserAccounts, Depends(get_user_accounts)],
 ) -> CreateInstitution:
-    return CreateInstitution(uow, clock)
+    return CreateInstitution(uow, clock, user_accounts)
 
 
 async def get_list_my_institutions(
@@ -190,6 +192,12 @@ async def get_resolve_membership(
     uow: Annotated[UnitOfWork, Depends(get_uow)],
 ) -> ResolveMembership:
     return ResolveMembership(uow)
+
+
+async def get_sync_profile_name(
+    uow: Annotated[UnitOfWork, Depends(get_uow)],
+) -> SyncProfileName:
+    return SyncProfileName(uow)
 
 
 async def get_create_invitation(
@@ -214,8 +222,9 @@ async def get_revoke_invitation(
 async def get_accept_invitation(
     uow: Annotated[UnitOfWork, Depends(get_uow)],
     clock: Annotated[Clock, Depends(get_clock)],
+    user_accounts: Annotated[UserAccounts, Depends(get_user_accounts)],
 ) -> AcceptInvitation:
-    return AcceptInvitation(uow, clock)
+    return AcceptInvitation(uow, clock, user_accounts)
 
 
 async def get_create_teacher(

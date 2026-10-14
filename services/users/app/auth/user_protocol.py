@@ -31,6 +31,8 @@ class AppUserProtocol(UserProtocol[uuid.UUID], Protocol):
 
     created_at: datetime
     must_change_password: bool
+    # Имя профиля, nullable; правит сам пользователь через PATCH /users/me.
+    full_name: str | None
 
 
 # Статическая проверка: in-memory сущность обязана удовлетворять

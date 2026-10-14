@@ -16,6 +16,7 @@ class InstitutionMember {
   const InstitutionMember({
     required this.userId,
     required this.displayName,
+    required this.displayNameOverride,
     required this.status,
     required this.createdAt,
     required this.groupIds,
@@ -24,13 +25,21 @@ class InstitutionMember {
   factory InstitutionMember.fromJson(Map<String, dynamic> json) => InstitutionMember(
         userId: json['user_id'] as String,
         displayName: json['display_name'] as String?,
+        displayNameOverride: json['display_name_override'] as String?,
         status: MembershipStatus.fromJson(json['status'] as String),
         createdAt: DateTime.parse(json['created_at'] as String),
         groupIds: (json['group_ids'] as List<dynamic>).map((item) => item as String).toList(),
       );
 
   final String userId;
+
+  /// Посчитанное имя для показа: накладка админа, если она есть, иначе имя
+  /// из профиля пользователя. Использовать только для отображения.
   final String? displayName;
+
+  /// Сырая накладка админа (`null`, если админ имя не переопределял).
+  /// Использовать для подстановки в поле ввода — не [displayName].
+  final String? displayNameOverride;
   final MembershipStatus status;
   final DateTime createdAt;
   final List<String> groupIds;

@@ -13,6 +13,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router'
 
 import { useAuth } from '../auth/authContext'
+import { ChangeNameForm } from '../components/ChangeNameForm'
 import { ChangePasswordForm } from '../components/ChangePasswordForm'
 import { FormError } from '../components/FormError'
 import { InstitutionCreateForm } from '../components/InstitutionCreateForm'
@@ -27,6 +28,7 @@ export function ProfilePage() {
     useAuth()
   const navigate = useNavigate()
 
+  const [nameSaved, setNameSaved] = useState(false)
   const [passwordSaved, setPasswordSaved] = useState(false)
   const [switchingId, setSwitchingId] = useState<string | null>(null)
   const [switchError, setSwitchError] = useState<unknown>(null)
@@ -62,6 +64,12 @@ export function ProfilePage() {
       <section className="profile-section">
         <h2>Почта</h2>
         <p>{user?.email}</p>
+      </section>
+
+      <section className="profile-section">
+        <h2>Имя</h2>
+        <ChangeNameForm onSuccess={() => setNameSaved(true)} />
+        <SavedNotice show={nameSaved} text="Имя сохранено" />
       </section>
 
       <section className="profile-section">

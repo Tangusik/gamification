@@ -24,6 +24,13 @@
 * ``PASSWORD_REJECTED`` — пароль не прошёл ``UserManager.validate_password``
   (сейчас — минимальная длина).
 
+Код, относящийся к ``GET /internal/users/{user_id}`` (план
+``.claude/plans/11-user-name.md``, этап 2):
+
+* ``USER_NOT_FOUND`` — пользователя с таким ``id`` нет. Отдельный класс
+  от доменного ``UserNotFoundError`` в ``errors.py`` по той же причине,
+  что и у ``USER_ALREADY_EXISTS`` выше.
+
 Правила словаря те же, что и у ``access_errors``: код — стабильная
 строка, не локализуется и не переиспользуется под новым смыслом;
 HTTP-статус в домене не хранится, перевод — задача
@@ -77,3 +84,15 @@ class PasswordRejectedError(InternalApiError):
     """Пароль не прошёл политику паролей (``POST /internal/users``)."""
 
     code = "PASSWORD_REJECTED"
+
+
+class UserNotFoundError(InternalApiError):
+    """Пользователь с запрошенным ``id`` не найден (``GET /internal/users/{id}``).
+
+    Совпадает по имени с доменной ``errors.UserNotFoundError`` — это
+    разные классы в разных пространствах кодов, импортирующий код
+    обязан различать их по модулю (алиас при одновременном импорте), как
+    и ``UserAlreadyExistsError`` выше.
+    """
+
+    code = "USER_NOT_FOUND"

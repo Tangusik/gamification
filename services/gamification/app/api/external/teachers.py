@@ -38,6 +38,7 @@ async def create_teacher(
     return MemberRead(
         user_id=view.user_id,
         display_name=view.display_name,
+        display_name_override=view.display_name_override,
         status=view.status,
         created_at=view.created_at,
         group_ids=view.group_ids,
@@ -60,6 +61,7 @@ async def list_teachers(
         MemberRead(
             user_id=view.user_id,
             display_name=view.display_name,
+            display_name_override=view.display_name_override,
             status=view.status,
             created_at=view.created_at,
             group_ids=view.group_ids,
@@ -95,6 +97,7 @@ async def update_teacher(
     return MemberRead(
         user_id=view.user_id,
         display_name=view.display_name,
+        display_name_override=view.display_name_override,
         status=view.status,
         created_at=view.created_at,
         group_ids=view.group_ids,

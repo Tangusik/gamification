@@ -442,6 +442,92 @@ async def test_invitation_lookup_finds_by_token_not_by_foreign_token(
             assert not_found is None
 
 
+async def test_profile_name_sync_requires_dedicated_context_variable(
+    db_env: str,
+) -> None:
+    """Раздел 5, пункт «межарендные порты» (план 11, этап 3): без
+    ``app.profile_sync_user_id`` поверх всех учреждений ``UPDATE`` не
+    проходит ``WITH CHECK`` основной политики; с переменной — только
+    членства указанного пользователя, чужие строки недоступны на запись.
+    """
+    async with postgres_schema(db_env) as engine:
+        session_factory = create_session_factory(engine)
+        institution_a = await _seed_institution(session_factory)
+        institution_b = await _seed_institution(session_factory)
+        user_id = uuid.uuid4()
+        stranger_id = uuid.uuid4()
+
+        async with session_factory() as session:
+            await set_institution_context(session, institution_a.id)
+            membership_a = _new_membership(
+                user_id=user_id, institution_id=institution_a.id
+            )
+            await SqlAlchemyInstitutionMemberships(session, institution_a.id).add(
+                membership_a
+            )
+            await session.commit()
+
+            await set_institution_context(session, institution_b.id)
+            membership_b = _new_membership(
+                user_id=user_id, institution_id=institution_b.id
+            )
+            await SqlAlchemyInstitutionMemberships(session, institution_b.id).add(
+                membership_b
+            )
+            await session.commit()
+
+            await set_institution_context(session, institution_b.id)
+            stranger_membership = _new_membership(
+                user_id=stranger_id, institution_id=institution_b.id
+            )
+            await SqlAlchemyInstitutionMemberships(session, institution_b.id).add(
+                stranger_membership
+            )
+            await session.commit()
+
+        async with session_factory() as session:
+            # Без app.profile_sync_user_id и без контекста учреждения —
+            # основная политика (WITH CHECK по institution_ctx) фильтрует
+            # всё: 0 строк обновлено, не ошибка приведения (NULLIF).
+            result = await session.execute(
+                text(
+                    "UPDATE memberships SET profile_name = 'Взлом' "
+                    "WHERE user_id = :user_id"
+                ),
+                {"user_id": str(user_id)},
+            )
+            assert result.rowcount == 0
+            await session.rollback()
+
+        async with session_factory() as session:
+            updated = await SqlAlchemyUserMemberships(session).set_profile_name(
+                user_id, "Новое Имя"
+            )
+            await session.commit()
+            assert updated == 2
+
+        async with session_factory() as session:
+            await set_institution_context(session, institution_a.id)
+            fetched_a = await SqlAlchemyInstitutionMemberships(
+                session, institution_a.id
+            ).get_for_user(user_id)
+            assert fetched_a.profile_name == "Новое Имя"
+
+            await set_institution_context(session, institution_b.id)
+            fetched_b = await SqlAlchemyInstitutionMemberships(
+                session, institution_b.id
+            ).get_for_user(user_id)
+            assert fetched_b.profile_name == "Новое Имя"
+
+            # Чужая строка (stranger_id) не затронута ни видимостью, ни
+            # записью: set_profile_name выставляет app.profile_sync_user_id
+            # из переданного user_id, а не из предыдущей сессии.
+            fetched_stranger = await SqlAlchemyInstitutionMemberships(
+                session, institution_b.id
+            ).get_for_user(stranger_id)
+            assert fetched_stranger.profile_name is None
+
+
 async def test_unit_of_work_rejects_second_institution_in_one_transaction(
     db_env: str,
 ) -> None:

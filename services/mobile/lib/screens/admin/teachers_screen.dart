@@ -248,7 +248,7 @@ class _TeacherCardState extends State<_TeacherCard> {
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.member.displayName ?? '');
+    _nameController = TextEditingController(text: widget.member.displayNameOverride ?? '');
   }
 
   @override
@@ -272,7 +272,7 @@ class _TeacherCardState extends State<_TeacherCard> {
               controller: _nameController,
               enabled: !widget.busy,
               maxLength: 100,
-              decoration: const InputDecoration(labelText: 'Имя', hintText: 'Без имени'),
+              decoration: const InputDecoration(labelText: 'Имя', hintText: 'Имя из профиля'),
             ),
             Text(
               'групп: ${member.groupIds.length} · создан ${_formatDate(member.createdAt)}',

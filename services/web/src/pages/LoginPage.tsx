@@ -1,17 +1,15 @@
 /** Страница входа. */
 import { useState, type FormEvent } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router'
+import { Link, useLocation } from 'react-router'
 
 import { ApiError } from '../api/errors'
 import { useAuth } from '../auth/authContext'
-import { targetFromState } from '../auth/fromLocation'
 import { FieldError } from '../components/FieldError'
 import { FormError } from '../components/FormError'
 import { messageForError } from '../i18n/errorMessages'
 
 export function LoginPage() {
   const { login } = useAuth()
-  const navigate = useNavigate()
   const location = useLocation()
 
   const [email, setEmail] = useState('')
@@ -25,7 +23,6 @@ export function LoginPage() {
     setError(null)
     try {
       await login(email, password)
-      navigate(targetFromState(location.state), { replace: true })
     } catch (caught) {
       setError(caught instanceof ApiError ? caught : new ApiError(0, 'UNKNOWN_ERROR'))
     } finally {

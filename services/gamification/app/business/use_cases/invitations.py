@@ -10,8 +10,11 @@ from app.business.domain.entities import Invitation, create_invitation
 from app.business.domain.enums import MembershipStatus, UserRole
 from app.business.domain.errors import MembershipAlreadyExistsError
 from app.business.domain.policies import check_role, require_institution_context
-from app.business.ports import Clock, UnitOfWork
-from app.business.use_cases.institutions import MembershipView
+from app.business.ports import Clock, UnitOfWork, UserAccounts
+from app.business.use_cases.institutions import (
+    MembershipView,
+    get_profile_name_or_none,
+)
 
 # Роли, которым доступны операции над приглашениями (F3): админ и
 # преподаватель создают и видят список, отзывает автор или админ.
@@ -148,11 +151,20 @@ class AcceptInvitation:
     с переводом конфликта уникальности в идемпотентный ответ.
     """
 
-    def __init__(self, uow: UnitOfWork, clock: Clock) -> None:
+    def __init__(
+        self, uow: UnitOfWork, clock: Clock, user_accounts: UserAccounts
+    ) -> None:
         self._uow = uow
         self._clock = clock
+        self._user_accounts = user_accounts
 
     async def execute(self, *, user_id: uuid.UUID, token: str) -> MembershipView:
+        # Профильное имя — вне открытой транзакции БД, тот же приём, что
+        # в CreateTeacher и CreateInstitution. Запрашивается заранее, до
+        # того как известно, нужно ли новое членство (существующее
+        # членство его не использует) — лишний вызов на идемпотентном
+        # повторе дешевле, чем раскрытие одной транзакции на несколько.
+        profile_name = await get_profile_name_or_none(self._user_accounts, user_id)
         async with self._uow as uow:
             invitation = await uow.invitation_lookup.get_for_accept(token)
             if invitation is None or invitation.is_revoked():
@@ -168,7 +180,7 @@ class AcceptInvitation:
             else:
                 # Может бросить InvitationInvalidError (лимит исчерпан).
                 new_membership = invitation.accept(
-                    user_id=user_id, now=self._clock.now()
+                    user_id=user_id, now=self._clock.now(), profile_name=profile_name
                 )
                 try:
                     await scope.memberships.add(new_membership)

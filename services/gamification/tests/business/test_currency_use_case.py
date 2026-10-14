@@ -26,6 +26,7 @@ from app.business.use_cases.invitations import AcceptInvitation, CreateInvitatio
 from app.business.use_cases.students import UpdateStudent
 from app.repositories.in_memory import InMemoryStore
 from app.repositories.uow import InMemoryUnitOfWork
+from tests.business.conftest import NullUserAccounts
 
 
 class FixedClock:
@@ -52,12 +53,14 @@ def clock() -> FixedClock:
 
 
 async def _create_institution(uow: InMemoryUnitOfWork, clock: FixedClock, admin_id):
-    return await CreateInstitution(uow, clock).execute(
+    return await CreateInstitution(uow, clock, NullUserAccounts()).execute(
         name="Школа №1", kind=InstitutionKind.SCHOOL, created_by=admin_id
     )
 
 
-async def _add_teacher(uow, clock, institution_id, teacher_id) -> None:
+async def _add_teacher(
+    uow, clock, institution_id, teacher_id, *, profile_name: str | None = None
+) -> None:
     async with uow as opened:
         scope = await opened.for_institution(institution_id)
         await scope.memberships.add(
@@ -68,6 +71,7 @@ async def _add_teacher(uow, clock, institution_id, teacher_id) -> None:
                 role=UserRole.TEACHER,
                 status=MembershipStatus.ACTIVE,
                 created_at=clock.now(),
+                profile_name=profile_name,
             )
         )
         await opened.commit()
@@ -80,7 +84,7 @@ async def _invite_student(uow, clock, institution_id, admin_id, student_id) -> N
         actor_institution_id=institution_id,
         max_uses=1,
     )
-    await AcceptInvitation(uow, clock).execute(
+    await AcceptInvitation(uow, clock, NullUserAccounts()).execute(
         user_id=student_id, token=invitation.token
     )
 
@@ -136,6 +140,31 @@ async def test_teacher_accrues_to_student_of_own_group(
     )
     assert account.balance == 50
     assert len(account.transactions) == 1
+
+
+async def test_accrual_history_uses_profile_name_when_no_override(
+    uow: InMemoryUnitOfWork, clock: FixedClock
+) -> None:
+    """``created_by_name`` берётся из ``profile_name`` автора, когда у
+    него нет накладки ``display_name`` (план 11, этап 2)."""
+    admin_id = uuid.uuid4()
+    student_id = uuid.uuid4()
+    institution = await CreateInstitution(
+        uow, clock, NullUserAccounts(full_names={admin_id: "Профильное Имя"})
+    ).execute(name="Школа №1", kind=InstitutionKind.SCHOOL, created_by=admin_id)
+    await _invite_student(uow, clock, institution.id, admin_id, student_id)
+
+    view, _ = await CreateAccrual(uow, clock).execute(
+        institution_id=institution.id,
+        target_user_id=student_id,
+        actor_user_id=admin_id,
+        actor_institution_id=institution.id,
+        operation_id=uuid.uuid4(),
+        amount=50,
+        comment=None,
+    )
+
+    assert view.created_by_name == "Профильное Имя"
 
 
 async def test_teacher_cannot_accrue_to_student_of_other_group(

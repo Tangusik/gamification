@@ -51,13 +51,28 @@ class Membership:
     # Приглашение, по которому пришёл участник (F3–F7); ``None`` — членство
     # заведено иначе (например, создатель учреждения).
     invitation_id: uuid.UUID | None = None
-    # Имя участника в пределах учреждения (В4/D1). ``None``, пока админ
-    # его не заполнил — у пришедших по приглашению оно изначально пустое.
+    # Имя участника в пределах учреждения (В4/D1) — необязательная
+    # накладка админа поверх профильного имени. ``None``, пока админ его
+    # не заполнил.
     display_name: str | None = None
+    # Кэш-копия профильного имени (``users.full_name``, план 11, этап 2),
+    # синхронизируемая из users. Источник истины — не эта колонка, а сам
+    # users; здесь только то, что успело доехать на момент создания
+    # членства или последней синхронизации (этап 3, вне объёма).
+    profile_name: str | None = None
 
     def is_active(self) -> bool:
         """Даёт ли это членство доступ к учреждению прямо сейчас."""
         return self.status is MembershipStatus.ACTIVE
+
+    @property
+    def effective_name(self) -> str | None:
+        """Имя для показа (план 11): накладка админа важнее профиля.
+
+        Правило отображения живёт в одном месте домена, а не повторяется
+        в каждом use case и роутере.
+        """
+        return self.display_name or self.profile_name
 
 
 @dataclass
@@ -87,13 +102,21 @@ class Invitation:
         """Исчерпан ли лимит применений (F2)."""
         return self.uses_count >= self.max_uses
 
-    def accept(self, *, user_id: uuid.UUID, now: datetime) -> Membership:
+    def accept(
+        self, *, user_id: uuid.UUID, now: datetime, profile_name: str | None = None
+    ) -> Membership:
         """Принять приглашение: новое членство плюс собственный счётчик.
 
         Вызывается только после проверки существующего членства
         пользователя (F7) — эта проверка находится вне сущности, ей
         нужен доступ к хранилищу. Здесь проверяется только собственная
         валидность приглашения (раздел 5, шаг 3).
+
+        ``profile_name`` (план 11, этап 2) — профильное имя из users на
+        момент принятия, уже полученное вызывающим use case вне
+        транзакции БД; ``None``, если users не ответил или имя пока не
+        заполнено — это не повод отказать человеку во входе в
+        учреждение.
 
         :raises InvitationInvalidError: приглашение отозвано или лимит
             применений исчерпан.
@@ -109,6 +132,7 @@ class Invitation:
             status=MembershipStatus.ACTIVE,
             created_at=now,
             invitation_id=self.id,
+            profile_name=profile_name,
         )
 
 
@@ -155,7 +179,12 @@ class NewInstitution:
 
 
 def create_institution(
-    *, name: str, kind: InstitutionKind, created_by: uuid.UUID, now: datetime
+    *,
+    name: str,
+    kind: InstitutionKind,
+    created_by: uuid.UUID,
+    now: datetime,
+    profile_name: str | None = None,
 ) -> NewInstitution:
     """Завести учреждение и членство создателя одним актом (E1).
 
@@ -164,6 +193,10 @@ def create_institution(
     вместе, с уже решёнными идентификаторами и временем создания.
     Хранилище лишь фиксирует то, что здесь уже решено, — вставка обеих
     записей идёт в одной транзакции Unit of Work (``use_cases.institutions``).
+
+    ``profile_name`` (план 11, этап 2) — профильное имя создателя из
+    users, уже полученное вызывающим use case вне транзакции БД;
+    ``None``, если users не ответил или имя пока не заполнено.
     """
     institution = Institution(
         id=uuid.uuid4(),
@@ -179,6 +212,7 @@ def create_institution(
         role=UserRole.INSTITUTION_ADMIN,
         status=MembershipStatus.ACTIVE,
         created_at=now,
+        profile_name=profile_name,
     )
     return NewInstitution(institution=institution, admin_membership=admin_membership)
 

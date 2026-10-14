@@ -26,12 +26,14 @@ from app.repositories.in_memory import (
     InMemoryInstitutionRepository,
     InMemoryInvitationLookup,
     InMemoryStore,
+    InMemoryUserMemberships,
 )
 from app.repositories.sql_alchemy import (
     SqlAlchemyInstitutionInvitations,
     SqlAlchemyInstitutionMemberships,
     SqlAlchemyInstitutionRepository,
     SqlAlchemyInvitationLookup,
+    SqlAlchemyUserMemberships,
 )
 from tests.db.conftest import assert_connected_to_test_database, set_institution_context
 
@@ -222,6 +224,40 @@ async def repos(request: pytest.FixtureRequest):
                 return SqlAlchemyInstitutionMemberships(session, institution_id)
 
             yield institution_repo, membership_repo_for
+
+
+@pytest.fixture(params=["in_memory", POSTGRES_PARAM])
+async def user_memberships_repos(request: pytest.FixtureRequest):
+    """``(institution_repo, membership_repo_for, user_memberships)`` (H1).
+
+    Та же форма, что у ``repos``, плюс межарендный порт
+    ``UserMemberships`` (план 11, этап 3: ``set_profile_name``) —
+    отдельная фикстура, а не расширение ``repos``, чтобы существующие
+    тесты репозитория членств не тянули лишнюю зависимость.
+    """
+    if request.param == "in_memory":
+        store = InMemoryStore()
+        institution_repo = InMemoryInstitutionRepository(store)
+
+        async def membership_repo_for(institution_id):
+            return InMemoryInstitutionMemberships(store, institution_id)
+
+        yield institution_repo, membership_repo_for, InMemoryUserMemberships(store)
+        return
+
+    async with postgres_schema(require_test_database_url()) as engine:
+        async with create_session_factory(engine)() as session:
+            institution_repo = SqlAlchemyInstitutionRepository(session)
+
+            async def membership_repo_for(institution_id):
+                await set_institution_context(session, institution_id)
+                return SqlAlchemyInstitutionMemberships(session, institution_id)
+
+            yield (
+                institution_repo,
+                membership_repo_for,
+                SqlAlchemyUserMemberships(session),
+            )
 
 
 @pytest.fixture(params=["in_memory", POSTGRES_PARAM])

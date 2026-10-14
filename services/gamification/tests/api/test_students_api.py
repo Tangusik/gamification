@@ -83,7 +83,43 @@ async def test_update_student_after_invitation(
     assert response.status_code == 200
     body = response.json()
     assert body["display_name"] == "Ученик"
+    assert body["display_name_override"] == "Ученик"
     assert body["status"] == "suspended"
+
+
+async def test_list_students_includes_display_name_override(
+    client: AsyncClient, app: FastAPI, token_factory
+) -> None:
+    admin_id = uuid.uuid4()
+    student_id = uuid.uuid4()
+    institution_id = await _create_institution(client, token_factory(subject=admin_id))
+    admin_headers = _headers(
+        token_factory(subject=admin_id, institution_id=institution_id)
+    )
+    invitation = await client.post(
+        f"/institutions/{institution_id}/invitations",
+        json={},
+        headers=admin_headers,
+    )
+    await client.post(
+        "/institutions/invitations/accept",
+        json={"token": invitation.json()["token"]},
+        headers=_headers(token_factory(subject=student_id)),
+    )
+    await client.patch(
+        f"/institutions/{institution_id}/students/{student_id}",
+        json={"display_name": "Ученик"},
+        headers=admin_headers,
+    )
+
+    response = await client.get(
+        f"/institutions/{institution_id}/students",
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200
+    [student] = response.json()
+    assert student["display_name_override"] == "Ученик"
 
 
 async def test_update_student_with_invalid_status_is_422(

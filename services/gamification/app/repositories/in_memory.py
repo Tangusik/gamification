@@ -150,6 +150,7 @@ class InMemoryInstitutionMemberships:
         self._store.memberships[membership.id] = replace(
             stored,
             display_name=membership.display_name,
+            profile_name=membership.profile_name,
             status=membership.status,
         )
 
@@ -166,6 +167,22 @@ class InMemoryUserMemberships:
             for membership in self._store.memberships.values()
             if membership.user_id == user_id
         ]
+
+    async def set_profile_name(self, user_id: uuid.UUID, full_name: str | None) -> int:
+        """:see: ``app.business.ports.UserMemberships.set_profile_name``.
+
+        Та же наблюдаемая семантика, что у SQL-реализации (по ``user_id``,
+        без фильтра по учреждению): возвращает число обновлённых членств.
+        """
+        updated = 0
+        for membership_id, membership in self._store.memberships.items():
+            if membership.user_id != user_id:
+                continue
+            self._store.memberships[membership_id] = replace(
+                membership, profile_name=full_name
+            )
+            updated += 1
+        return updated
 
 
 class InMemoryInstitutionInvitations:

@@ -10,12 +10,14 @@ import '../staff/staff_test_support.dart';
 Map<String, dynamic> teacherJson({
   String userId = 't1',
   String? displayName = 'Иван Иванов',
+  String? displayNameOverride,
   String status = 'active',
   String createdAt = '2026-01-10T10:00:00Z',
   List<String> groupIds = const [],
 }) => {
   'user_id': userId,
   'display_name': displayName,
+  'display_name_override': displayNameOverride ?? displayName,
   'status': status,
   'created_at': createdAt,
   'group_ids': groupIds,

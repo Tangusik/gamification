@@ -84,7 +84,7 @@ export function TeachersPage() {
   }
 
   function draftFor(member: InstitutionMember): string {
-    return drafts[member.user_id] ?? member.display_name ?? ''
+    return drafts[member.user_id] ?? member.display_name_override ?? ''
   }
 
   async function handleRename(member: InstitutionMember) {
@@ -205,7 +205,7 @@ export function TeachersPage() {
                       aria-label="Имя"
                       type="text"
                       maxLength={100}
-                      placeholder="Без имени"
+                      placeholder="Имя из профиля"
                       value={draftFor(member)}
                       onChange={(event) =>
                         setDrafts((prev) => ({ ...prev, [member.user_id]: event.target.value }))

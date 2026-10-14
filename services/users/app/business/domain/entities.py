@@ -54,6 +54,10 @@ class User:
     паролем (``POST /internal/users``) и снимается сменой пароля через
     ``PATCH /users/me``. Мягкий флаг: сервер запросы не блокирует, это
     дело клиента (решение C1).
+
+    ``full_name`` — единственное поле имени человека, без разбивки на
+    части (решение владельца): правит его сам пользователь через
+    ``PATCH /users/me``.
     """
 
     id: uuid.UUID
@@ -64,6 +68,7 @@ class User:
     is_verified: bool = False
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     must_change_password: bool = False
+    full_name: str | None = None
 
 
 @dataclass(frozen=True)

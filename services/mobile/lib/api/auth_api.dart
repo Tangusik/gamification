@@ -40,6 +40,7 @@ class User {
     required this.isVerified,
     required this.createdAt,
     required this.mustChangePassword,
+    this.fullName,
   });
 
   factory User.fromJson(Map<String, dynamic> json) => User(
@@ -50,6 +51,7 @@ class User {
         isVerified: json['is_verified'] as bool,
         createdAt: DateTime.parse(json['created_at'] as String),
         mustChangePassword: json['must_change_password'] as bool,
+        fullName: json['full_name'] as String?,
       );
 
   final String id;
@@ -61,6 +63,10 @@ class User {
 
   /// Пока стоит — приложение уводит на смену пароля.
   final bool mustChangePassword;
+
+  /// Имя пользователя; правит сам пользователь в профиле. `null` — имя не
+  /// задано.
+  final String? fullName;
 }
 
 enum InstitutionKind {
@@ -220,6 +226,13 @@ Future<User> getMe(ApiClient client) {
 Future<User> changePassword(ApiClient client, String password) {
   return client
       .request<Map<String, dynamic>>('/users/me', method: 'PATCH', json: {'password': password})
+      .then(User.fromJson);
+}
+
+/// Сменить своё имя. `fullName: null` сбрасывает имя — допустимое значение.
+Future<User> updateFullName(ApiClient client, String? fullName) {
+  return client
+      .request<Map<String, dynamic>>('/users/me', method: 'PATCH', json: {'full_name': fullName})
       .then(User.fromJson);
 }
 

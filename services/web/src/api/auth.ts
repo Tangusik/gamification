@@ -26,6 +26,7 @@ export type User = {
   created_at: string
   /** Пока стоит — фронт уводит на `/password`, пока пароль не сменён. */
   must_change_password: boolean
+  full_name: string | null
 }
 
 export type InstitutionKind = 'school' | 'camp'
@@ -106,6 +107,14 @@ export function getMe(token: string): Promise<User> {
  */
 export function changePassword(token: string, password: string): Promise<User> {
   return request<User>('/users/me', { method: 'PATCH', json: { password }, token })
+}
+
+/**
+ * Сменить своё имя. `full_name: null` сбрасывает имя — допустимое значение
+ * контракта.
+ */
+export function updateFullName(token: string, fullName: string | null): Promise<User> {
+  return request<User>('/users/me', { method: 'PATCH', json: { full_name: fullName }, token })
 }
 
 export function getMyInstitutions(token: string): Promise<Membership[]> {

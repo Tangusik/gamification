@@ -17,13 +17,22 @@ from app.business.domain.enums import MembershipStatus
 
 @dataclass(frozen=True)
 class MemberView:
-    """Элемент списка преподавателей/учеников — форма ``MemberRead`` (Ч2)."""
+    """Элемент списка преподавателей/учеников — форма ``MemberRead`` (Ч2).
+
+    ``display_name`` (план 11, этап 2) — посчитанное имя для показа
+    (``Membership.effective_name``): накладка админа, если она есть,
+    иначе профильное имя пользователя. ``display_name_override`` — само
+    сырое значение накладки, без подстановки профильного имени; нужно
+    полю правки имени у админа, чтобы сохранение без правок не
+    превращало профильное имя в накладку (план 11, п. 4.6).
+    """
 
     user_id: uuid.UUID
     display_name: str | None
     status: MembershipStatus
     created_at: datetime
     group_ids: list[uuid.UUID]
+    display_name_override: str | None = None
 
 
 def apply_member_update(

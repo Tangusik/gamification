@@ -1,9 +1,12 @@
-"""Тесты внутреннего заведения аккаунта с временным паролем.
+"""Тесты внутреннего заведения аккаунта и чтения профильного имени.
 
-Единственный клиент этого эндпоинта — gamification (решение А1,
-``.claude/plans/05-admin-features.md``, Ч1). Users создаёт аккаунт тем же
-путём, что и публичная регистрация (``UserManager.create(safe=True,
-must_change_password=True)``), одной записью в хранилище.
+Единственный клиент обоих эндпоинтов — gamification. ``POST
+/internal/users`` (решение А1, ``.claude/plans/05-admin-features.md``,
+Ч1) создаёт аккаунт тем же путём, что и публичная регистрация
+(``UserManager.create(safe=True, must_change_password=True)``), одной
+записью в хранилище. ``GET /internal/users/{id}`` (план
+``.claude/plans/11-user-name.md``, этап 2) отдаёт только ``id`` и
+``full_name`` — email в gamification сознательно не попадает.
 """
 
 import logging
@@ -37,8 +40,13 @@ def _headers(secret: str) -> dict[str, str]:
     return {"X-Service-Secret": secret}
 
 
-def _body(email: str = EMAIL, password: str = PASSWORD) -> dict[str, str]:
-    return {"email": email, "password": password}
+def _body(
+    email: str = EMAIL, password: str = PASSWORD, full_name: str | None = None
+) -> dict[str, str | None]:
+    body: dict[str, str | None] = {"email": email, "password": password}
+    if full_name is not None:
+        body["full_name"] = full_name
+    return body
 
 
 # --- служебный секрет ------------------------------------------------
@@ -70,6 +78,56 @@ async def test_create_user_sets_must_change_password_flag(
 
     user = find_user(EMAIL)
     assert user.must_change_password is True
+
+
+async def test_create_user_without_full_name_leaves_it_null(
+    client: AsyncClient,
+    internal_secret: str,
+    find_user: Callable[[str], object],
+) -> None:
+    """Без ``full_name`` в теле — создание всё равно проходит, имя ``null``."""
+    response = await client.post(URL, json=_body(), headers=_headers(internal_secret))
+
+    assert response.status_code == 201, response.text
+
+    user = find_user(EMAIL)
+    assert user.full_name is None
+
+
+async def test_create_user_with_full_name_is_stored(
+    client: AsyncClient,
+    internal_secret: str,
+    find_user: Callable[[str], object],
+) -> None:
+    """``full_name`` из тела запроса сохраняется и виден через ``GET /users/me``."""
+    response = await client.post(
+        URL,
+        json=_body(full_name="Иван Иванов"),
+        headers=_headers(internal_secret),
+    )
+
+    assert response.status_code == 201, response.text
+
+    user = find_user(EMAIL)
+    assert user.full_name == "Иван Иванов"
+
+
+async def test_create_user_with_blank_full_name_is_normalized_to_null(
+    client: AsyncClient,
+    internal_secret: str,
+    find_user: Callable[[str], object],
+) -> None:
+    """Строка из пробелов нормализуется в ``null``, как и на ``PATCH /users/me``."""
+    response = await client.post(
+        URL,
+        json=_body(full_name="   "),
+        headers=_headers(internal_secret),
+    )
+
+    assert response.status_code == 201, response.text
+
+    user = find_user(EMAIL)
+    assert user.full_name is None
 
 
 async def test_duplicate_email_case_insensitive_is_rejected(
@@ -214,6 +272,26 @@ async def test_setting_flag_field_directly_is_ignored(
     assert response.json()["must_change_password"] is True
 
 
+async def test_get_me_returns_full_name_set_at_internal_creation(
+    client: AsyncClient,
+    internal_secret: str,
+    auth_headers: Callable[..., Awaitable[dict[str, str]]],
+) -> None:
+    """Имя, переданное в ``POST /internal/users``, видно через ``GET /users/me``."""
+    created = await client.post(
+        URL,
+        json=_body(full_name="Иван Иванов"),
+        headers=_headers(internal_secret),
+    )
+    assert created.status_code == 201, created.text
+
+    headers = await auth_headers(EMAIL, PASSWORD)
+    response = await client.get("/users/me", headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["full_name"] == "Иван Иванов"
+
+
 async def test_get_me_returns_flag(
     client: AsyncClient,
     internal_secret: str,
@@ -229,3 +307,74 @@ async def test_get_me_returns_flag(
 
     assert response.status_code == 200, response.text
     assert response.json()["must_change_password"] is True
+
+
+# --- GET /internal/users/{id} -------------------------------------------
+
+
+async def test_get_internal_user_without_secret_is_rejected(
+    client: AsyncClient,
+    internal_secret: str,
+    find_user: Callable[[str], object],
+) -> None:
+    """Без секрета — тот же 401 SERVICE_AUTH_FAILED, что и у создания."""
+    created = await client.post(URL, json=_body(), headers=_headers(internal_secret))
+    assert created.status_code == 201, created.text
+    user_id = find_user(EMAIL).id
+
+    response = await client.get(f"{URL}/{user_id}")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "SERVICE_AUTH_FAILED"}
+
+
+async def test_get_internal_user_returns_id_and_full_name_without_email(
+    client: AsyncClient,
+    internal_secret: str,
+    find_user: Callable[[str], object],
+) -> None:
+    """Ответ — ровно ``{id, full_name}``, email в нём не присутствует."""
+    created = await client.post(
+        URL,
+        json=_body(full_name="Иван Иванов"),
+        headers=_headers(internal_secret),
+    )
+    assert created.status_code == 201, created.text
+    user_id = find_user(EMAIL).id
+
+    response = await client.get(f"{URL}/{user_id}", headers=_headers(internal_secret))
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"id": str(user_id), "full_name": "Иван Иванов"}
+    assert EMAIL not in response.text
+
+
+async def test_get_internal_user_without_full_name_returns_null(
+    client: AsyncClient,
+    internal_secret: str,
+    find_user: Callable[[str], object],
+) -> None:
+    """Пользователь без имени — ``full_name: null`` в ответе."""
+    created = await client.post(URL, json=_body(), headers=_headers(internal_secret))
+    assert created.status_code == 201, created.text
+    user_id = find_user(EMAIL).id
+
+    response = await client.get(f"{URL}/{user_id}", headers=_headers(internal_secret))
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"id": str(user_id), "full_name": None}
+
+
+async def test_get_internal_user_missing_id_returns_404(
+    client: AsyncClient,
+    internal_secret: str,
+) -> None:
+    """Несуществующий ``id`` — 404 USER_NOT_FOUND."""
+    missing_id = uuid.uuid4()
+
+    response = await client.get(
+        f"{URL}/{missing_id}", headers=_headers(internal_secret)
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "USER_NOT_FOUND"}

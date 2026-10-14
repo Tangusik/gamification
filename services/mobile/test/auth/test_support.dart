@@ -51,7 +51,7 @@ ResponseBody jsonResponse(int statusCode, Object body) {
   );
 }
 
-Map<String, dynamic> userJson({String id = 'u1', bool mustChangePassword = false}) => {
+Map<String, dynamic> userJson({String id = 'u1', bool mustChangePassword = false, String? fullName}) => {
   'id': id,
   'email': 'user@example.com',
   'is_active': true,
@@ -59,6 +59,7 @@ Map<String, dynamic> userJson({String id = 'u1', bool mustChangePassword = false
   'is_verified': true,
   'created_at': '2026-01-01T00:00:00Z',
   'must_change_password': mustChangePassword,
+  'full_name': fullName,
 };
 
 Map<String, dynamic> membershipJson({

@@ -58,6 +58,13 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
         Boolean, default=False, server_default=text("false"), nullable=False
     )
 
+    # Имя человека — единственное поле, без разбивки на части (решение
+    # владельца). Nullable: не заполнено при саморегистрации; при
+    # создании через ``POST /internal/users`` может прийти от
+    # gamification (план 11-user-name, этап 2), а поправить его после
+    # этого может только сам пользователь через ``PATCH /users/me``.
+    full_name: Mapped[str | None] = mapped_column(String(length=100), nullable=True)
+
     __table_args__ = (
         # Уникальность email без учёта регистра. Индекс с колонки
         # ``email``, приходящий из базового класса, регистрозависим:

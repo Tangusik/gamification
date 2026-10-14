@@ -397,7 +397,7 @@ class _StudentCardScreenState extends ConsumerState<StudentCardScreen> {
                   );
                 }
                 if (!_nameInitialized) {
-                  _nameController.text = student.displayName ?? '';
+                  _nameController.text = student.displayNameOverride ?? '';
                   _nameInitialized = true;
                 }
                 final studentName = student.displayName ?? 'Без имени';
@@ -440,7 +440,7 @@ class _StudentCardScreenState extends ConsumerState<StudentCardScreen> {
             TextField(
               controller: _nameController,
               maxLength: 100,
-              decoration: const InputDecoration(labelText: 'Имя', hintText: 'Без имени'),
+              decoration: const InputDecoration(labelText: 'Имя', hintText: 'Имя из профиля'),
               enabled: !_savingName,
             ),
             if (_nameError != null)

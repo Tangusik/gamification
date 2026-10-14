@@ -14,8 +14,13 @@ class FakeUserAccounts:
     def __init__(self, *, user_id=None):
         self._user_id = user_id or uuid.uuid4()
 
-    async def create_account(self, *, email: str, password: str):
+    async def create_account(
+        self, *, email: str, password: str, full_name: str | None = None
+    ):
         return self._user_id
+
+    async def get_full_name(self, user_id):
+        return None
 
 
 def _headers(token: str) -> dict[str, str]:

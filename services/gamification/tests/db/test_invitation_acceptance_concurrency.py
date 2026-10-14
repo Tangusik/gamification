@@ -17,6 +17,7 @@ from app.business.use_cases.institutions import CreateInstitution
 from app.business.use_cases.invitations import AcceptInvitation, CreateInvitation
 from app.repositories.database import create_session_factory
 from app.repositories.uow import SqlAlchemyUnitOfWork
+from tests.business.conftest import NullUserAccounts
 from tests.contract.conftest import postgres_schema
 
 
@@ -36,9 +37,9 @@ async def test_two_parallel_accepts_of_one_time_invitation_yield_one_membership(
 
         setup_uow = SqlAlchemyUnitOfWork(session_factory)
         admin_id = uuid.uuid4()
-        institution = await CreateInstitution(setup_uow, clock).execute(
-            name="Школа №1", kind=InstitutionKind.SCHOOL, created_by=admin_id
-        )
+        institution = await CreateInstitution(
+            setup_uow, clock, NullUserAccounts()
+        ).execute(name="Школа №1", kind=InstitutionKind.SCHOOL, created_by=admin_id)
         invitation = await CreateInvitation(setup_uow, clock).execute(
             institution_id=institution.id,
             actor_user_id=admin_id,
@@ -50,7 +51,7 @@ async def test_two_parallel_accepts_of_one_time_invitation_yield_one_membership(
 
         async def accept(user_id: uuid.UUID):
             uow = SqlAlchemyUnitOfWork(session_factory)
-            return await AcceptInvitation(uow, clock).execute(
+            return await AcceptInvitation(uow, clock, NullUserAccounts()).execute(
                 user_id=user_id, token=invitation.token
             )
 

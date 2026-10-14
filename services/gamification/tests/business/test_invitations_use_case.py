@@ -23,6 +23,7 @@ from app.business.use_cases.invitations import (
 )
 from app.repositories.in_memory import InMemoryStore
 from app.repositories.uow import InMemoryUnitOfWork
+from tests.business.conftest import NullUserAccounts
 
 
 class FixedClock:
@@ -51,7 +52,7 @@ def clock() -> FixedClock:
 
 
 async def _create_institution(uow: InMemoryUnitOfWork, clock: FixedClock, admin_id):
-    use_case = CreateInstitution(uow, clock)
+    use_case = CreateInstitution(uow, clock, NullUserAccounts())
     return await use_case.execute(
         name="Школа №1", kind=InstitutionKind.SCHOOL, created_by=admin_id
     )
@@ -83,7 +84,7 @@ async def test_student_cannot_create_invitation(
     admin_id = uuid.uuid4()
     student_id = uuid.uuid4()
     institution = await _create_institution(uow, clock, admin_id)
-    accepted = await AcceptInvitation(uow, clock).execute(
+    accepted = await AcceptInvitation(uow, clock, NullUserAccounts()).execute(
         user_id=student_id,
         token=(
             await CreateInvitation(uow, clock).execute(
@@ -143,7 +144,7 @@ async def test_teacher_sees_only_own_invitations(
     )
     # Преподаватель становится членом через собственное приглашение,
     # чтобы принять и создавать приглашения на общих правах (F3).
-    await AcceptInvitation(uow, clock).execute(
+    await AcceptInvitation(uow, clock, NullUserAccounts()).execute(
         user_id=teacher_id, token=admin_invitation.token
     )
     scope = await uow.for_institution(institution.id)
@@ -190,7 +191,7 @@ async def test_teacher_cannot_revoke_foreign_invitation(
         actor_institution_id=institution.id,
         max_uses=1,
     )
-    await AcceptInvitation(uow, clock).execute(
+    await AcceptInvitation(uow, clock, NullUserAccounts()).execute(
         user_id=teacher_id, token=admin_invitation.token
     )
     scope = await uow.for_institution(institution.id)
@@ -241,7 +242,7 @@ async def test_admin_revokes_any_invitation_idempotently(
     )
 
     with pytest.raises(InvitationInvalidError):
-        await AcceptInvitation(uow, clock).execute(
+        await AcceptInvitation(uow, clock, NullUserAccounts()).execute(
             user_id=uuid.uuid4(), token=invitation.token
         )
 
@@ -250,7 +251,7 @@ async def test_accept_unknown_token_is_invalid(
     uow: InMemoryUnitOfWork, clock: FixedClock
 ) -> None:
     with pytest.raises(InvitationInvalidError):
-        await AcceptInvitation(uow, clock).execute(
+        await AcceptInvitation(uow, clock, NullUserAccounts()).execute(
             user_id=uuid.uuid4(), token="does-not-exist"
         )
 
@@ -267,14 +268,66 @@ async def test_accept_exhausted_invitation_is_invalid(
         max_uses=1,
     )
 
-    await AcceptInvitation(uow, clock).execute(
+    await AcceptInvitation(uow, clock, NullUserAccounts()).execute(
         user_id=uuid.uuid4(), token=invitation.token
     )
 
     with pytest.raises(InvitationInvalidError):
-        await AcceptInvitation(uow, clock).execute(
+        await AcceptInvitation(uow, clock, NullUserAccounts()).execute(
             user_id=uuid.uuid4(), token=invitation.token
         )
+
+
+async def test_accept_invitation_fills_profile_name_from_users(
+    uow: InMemoryUnitOfWork, clock: FixedClock
+) -> None:
+    """Профильное имя ученика подтягивается из users (план 11, этап 2)."""
+    admin_id = uuid.uuid4()
+    student_id = uuid.uuid4()
+    institution = await _create_institution(uow, clock, admin_id)
+    invitation = await CreateInvitation(uow, clock).execute(
+        institution_id=institution.id,
+        actor_user_id=admin_id,
+        actor_institution_id=institution.id,
+        max_uses=1,
+    )
+    user_accounts = NullUserAccounts(full_names={student_id: "Профильное Имя"})
+
+    await AcceptInvitation(uow, clock, user_accounts).execute(
+        user_id=student_id, token=invitation.token
+    )
+
+    scope = await uow.for_institution(institution.id)
+    membership = await scope.memberships.get_for_user(student_id)
+    assert membership is not None
+    assert membership.profile_name == "Профильное Имя"
+    assert membership.effective_name == "Профильное Имя"
+
+
+async def test_accept_invitation_succeeds_when_users_is_unavailable(
+    uow: InMemoryUnitOfWork, clock: FixedClock
+) -> None:
+    """Недоступность users не блокирует вход в учреждение (план 11, п.
+    6): членство заводится с ``profile_name=None``."""
+    admin_id = uuid.uuid4()
+    student_id = uuid.uuid4()
+    institution = await _create_institution(uow, clock, admin_id)
+    invitation = await CreateInvitation(uow, clock).execute(
+        institution_id=institution.id,
+        actor_user_id=admin_id,
+        actor_institution_id=institution.id,
+        max_uses=1,
+    )
+
+    accepted = await AcceptInvitation(
+        uow, clock, NullUserAccounts(unavailable=True)
+    ).execute(user_id=student_id, token=invitation.token)
+
+    assert accepted.role is UserRole.STUDENT
+    scope = await uow.for_institution(institution.id)
+    membership = await scope.memberships.get_for_user(student_id)
+    assert membership is not None
+    assert membership.profile_name is None
 
 
 async def test_accept_twice_by_same_user_is_idempotent(
@@ -289,7 +342,7 @@ async def test_accept_twice_by_same_user_is_idempotent(
         actor_institution_id=institution.id,
         max_uses=1,
     )
-    accept = AcceptInvitation(uow, clock)
+    accept = AcceptInvitation(uow, clock, NullUserAccounts())
 
     first = await accept.execute(user_id=student_id, token=invitation.token)
     second = await accept.execute(user_id=student_id, token=invitation.token)
@@ -313,7 +366,7 @@ async def test_accept_by_suspended_member_is_rejected_without_reactivation(
         actor_institution_id=institution.id,
         max_uses=5,
     )
-    await AcceptInvitation(uow, clock).execute(
+    await AcceptInvitation(uow, clock, NullUserAccounts()).execute(
         user_id=student_id, token=invitation.token
     )
     scope = await uow.for_institution(institution.id)
@@ -321,7 +374,7 @@ async def test_accept_by_suspended_member_is_rejected_without_reactivation(
     uow._store.memberships[membership.id].status = MembershipStatus.SUSPENDED  # noqa: SLF001
 
     with pytest.raises(MembershipSuspendedError):
-        await AcceptInvitation(uow, clock).execute(
+        await AcceptInvitation(uow, clock, NullUserAccounts()).execute(
             user_id=student_id, token=invitation.token
         )
 

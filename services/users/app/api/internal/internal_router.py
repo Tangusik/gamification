@@ -1,6 +1,6 @@
 """Внутреннее API сервиса users — вызовы от других микросервисов.
 
-Два эндпоинта:
+Эндпоинты:
 
 * выпуск токена в контексте учреждения
   (``POST /internal/tokens/institution-context``), которым пользуется
@@ -9,7 +9,10 @@
 * заведение аккаунта преподавателя с временным паролем
   (``POST /internal/users``), которым пользуется gamification при
   создании членства (решение А1,
-  ``.claude/plans/05-admin-features.md``).
+  ``.claude/plans/05-admin-features.md``);
+* чтение профильного имени пользователя
+  (``GET /internal/users/{user_id}``), которым пользуется gamification,
+  чтобы узнать имя, не владея email (план ``11-user-name``, этап 2).
 
 Роутер лежит вне ``/users`` и потому недостижим снаружи по построению
 (см. ``.claude/knowledge/07-routing.md``), а не по запрету в nginx.
@@ -56,11 +59,12 @@ from app.business.domain.internal_errors import (
     ServiceAuthFailedError,
     SubjectTokenRejectedError,
     UserAlreadyExistsError,
+    UserNotFoundError,
 )
 from app.core.config import Settings, get_settings
 from app.repositories.denylist import TokenDenylist
 from app.repositories.protocols import UserRepository
-from app.schemas.user import UserCreate
+from app.schemas.user import FullName, UserCreate
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +93,22 @@ class InternalUserCreateRequest(BaseModel):
 
     ``extra="forbid"`` — та же причина, что и у запроса выпуска токена:
     лишнее поле — признак рассинхронизации контракта.
+
+    ``full_name`` — необязательное профильное имя (план 11-user-name,
+    этап 2): gamification знает имя преподавателя раньше, чем он сам
+    зайдёт и поправит его через ``PATCH /users/me``, и передаёт его при
+    заведении аккаунта. Отсутствие поля (``None``) — обычный случай, имя
+    не обязано быть известно заранее. Нормализуется тем же правилом,
+    что и ``PATCH /users/me`` (``FullName``, решение владельца
+    2026-10-12): пустая строка и строка из пробелов становятся
+    ``None``, краевые пробелы у непустого имени срезаются.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     email: EmailStr
     password: str
+    full_name: FullName
 
 
 class InternalUserCreateResponse(BaseModel):
@@ -105,6 +119,37 @@ class InternalUserCreateResponse(BaseModel):
     """
 
     id: uuid.UUID
+
+
+class _InternalUserCreate(UserCreate):
+    """``UserCreate`` с добавленным ``full_name`` — только для этого роутера.
+
+    Отдельный класс, а не поле в самой ``UserCreate``: та схема
+    используется и публичной регистрацией
+    (``fastapi_users.get_register_router``), и расширять её контракт
+    поводом внутреннего вызова не стоит. ``create_update_dict``
+    наследуется без переопределения — ``full_name`` не входит в
+    ``_PROTECTED_FIELDS``, поэтому проходит в ``user_dict`` как есть, и
+    ``UserManager.create`` создаёт пользователя одной записью, как и
+    остальные поля. Значение приходит сюда уже нормализованным
+    ``InternalUserCreateRequest``, но поле объявлено тем же ``FullName``
+    — не ради повторной нормализации, а чтобы не разводить контракт
+    поля по двум схемам.
+    """
+
+    full_name: FullName
+
+
+class InternalUserReadResponse(BaseModel):
+    """Ответ на ``GET /internal/users/{user_id}`` — без email.
+
+    Решение проекта: email в gamification не попадает ни в каком виде
+    (план 11-user-name, этап 2) — gamification нужно только имя для
+    отображения, а не персональные данные для связи.
+    """
+
+    id: uuid.UUID
+    full_name: str | None
 
 
 def _service_secret_matches(provided: str, secret: str) -> bool:
@@ -252,10 +297,17 @@ async def create_internal_user(
     регистра: уникальность по ``lower(email)`` обеспечивает хранилище
     (``ix_users_email_lower``), а библиотечная проверка в
     ``UserManager.create`` сравнивает тем же способом.
+
+    ``full_name`` из тела запроса, если он есть, идёт в тот же
+    ``user_dict`` — одной записью, как и остальные поля (``_InternalUserCreate``).
     """
     try:
         user = await user_manager.create(
-            UserCreate(email=payload.email, password=payload.password),
+            _InternalUserCreate(
+                email=payload.email,
+                password=payload.password,
+                full_name=payload.full_name,
+            ),
             safe=True,
             must_change_password=True,
         )
@@ -272,3 +324,24 @@ async def create_internal_user(
     logger.info("Internal user created: caller=gamification user_id=%s", user.id)
 
     return InternalUserCreateResponse(id=user.id)
+
+
+@router.get("/users/{user_id}", response_model=InternalUserReadResponse)
+async def get_internal_user(
+    user_id: uuid.UUID,
+    user_db: Annotated[UserRepository, Depends(get_user_db)],
+) -> InternalUserReadResponse:
+    """Отдать профильное имя пользователя по запросу gamification.
+
+    Email в ответ не идёт ни в каком виде (решение проекта): gamification
+    он не нужен и сознательно не передаётся — см. модульный докстринг.
+    Поэтому ответ собирается явно по двум полям, а не из всей сущности
+    ``User`` через ``from_attributes`` — так лишнее поле не может
+    просочиться в контракт по ошибке при будущем добавлении поля в
+    сущность.
+    """
+    user = await user_db.get(user_id)
+    if user is None:
+        raise UserNotFoundError
+
+    return InternalUserReadResponse(id=user.id, full_name=user.full_name)

@@ -43,10 +43,18 @@ class MemberUpdate(BaseModel):
 
 
 class MemberRead(BaseModel):
-    """Элемент списка преподавателей/учеников (Ч2а, Ч2в)."""
+    """Элемент списка преподавателей/учеников (Ч2а, Ч2в).
+
+    ``display_name`` (план 11, этап 2) — посчитанное имя для показа:
+    накладка админа, если она есть, иначе профильное имя пользователя.
+    ``display_name_override`` — сырое значение накладки (без подстановки
+    профиля); нужно полю правки имени у админа, чтобы сохранение без
+    правок не превращало профильное имя в накладку.
+    """
 
     user_id: uuid.UUID
     display_name: str | None
+    display_name_override: str | None
     status: MembershipStatus
     created_at: datetime
     group_ids: list[uuid.UUID]

@@ -30,6 +30,7 @@ from app.business.use_cases.market import (
 )
 from app.repositories.in_memory import InMemoryStore
 from app.repositories.uow import InMemoryUnitOfWork
+from tests.business.conftest import NullUserAccounts
 
 
 class FixedClock:
@@ -56,7 +57,7 @@ def clock() -> FixedClock:
 
 
 async def _create_institution(uow, clock, admin_id):
-    return await CreateInstitution(uow, clock).execute(
+    return await CreateInstitution(uow, clock, NullUserAccounts()).execute(
         name="Школа №1", kind=InstitutionKind.SCHOOL, created_by=admin_id
     )
 
@@ -68,7 +69,7 @@ async def _invite_student(uow, clock, institution_id, admin_id, student_id) -> N
         actor_institution_id=institution_id,
         max_uses=1,
     )
-    await AcceptInvitation(uow, clock).execute(
+    await AcceptInvitation(uow, clock, NullUserAccounts()).execute(
         user_id=student_id, token=invitation.token
     )
 
@@ -592,6 +593,44 @@ async def test_admin_list_purchases_pending_without_limit_and_status_filter(
     )
     assert len(everything) == 1
     assert everything[0].user_id == student_id
+
+
+async def test_purchase_list_uses_profile_name_when_no_override(uow, clock) -> None:
+    """``user_name`` берётся из ``profile_name`` покупателя, когда у него
+    нет накладки ``display_name`` (план 11, этап 2)."""
+    admin_id = uuid.uuid4()
+    student_id = uuid.uuid4()
+    institution = await _create_institution(uow, clock, admin_id)
+    invitation = await CreateInvitation(uow, clock).execute(
+        institution_id=institution.id,
+        actor_user_id=admin_id,
+        actor_institution_id=institution.id,
+        max_uses=1,
+    )
+    await AcceptInvitation(
+        uow, clock, NullUserAccounts(full_names={student_id: "Профильное Имя"})
+    ).execute(user_id=student_id, token=invitation.token)
+    privilege = await _create_privilege(uow, clock, institution.id, admin_id, price=10)
+    await _accrue(uow, clock, institution.id, admin_id, student_id, 10)
+    await CreatePurchase(uow, clock).execute(
+        institution_id=institution.id,
+        actor_user_id=student_id,
+        actor_institution_id=institution.id,
+        operation_id=uuid.uuid4(),
+        privilege_id=privilege.id,
+        expected_price=10,
+    )
+
+    purchases = await ListPurchases(uow).execute(
+        institution_id=institution.id,
+        actor_user_id=admin_id,
+        actor_institution_id=institution.id,
+        status=None,
+        user_id=None,
+    )
+
+    assert len(purchases) == 1
+    assert purchases[0].user_name == "Профильное Имя"
 
 
 async def test_student_cannot_purchase_as_teacher_role(uow, clock) -> None:

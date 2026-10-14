@@ -16,6 +16,7 @@ from app.business.use_cases.institutions import CreateInstitution
 from app.business.use_cases.teachers import CreateTeacher, ListTeachers, UpdateTeacher
 from app.repositories.in_memory import InMemoryStore
 from app.repositories.uow import InMemoryUnitOfWork
+from tests.business.conftest import NullUserAccounts
 
 
 class FixedClock:
@@ -34,10 +35,12 @@ class FakeUserAccounts:
     ):
         self._user_id = user_id or uuid.uuid4()
         self._error = error
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, str | None]] = []
 
-    async def create_account(self, *, email: str, password: str) -> uuid.UUID:
-        self.calls.append((email, password))
+    async def create_account(
+        self, *, email: str, password: str, full_name: str | None = None
+    ) -> uuid.UUID:
+        self.calls.append((email, password, full_name))
         if self._error is not None:
             raise self._error
         return self._user_id
@@ -59,7 +62,7 @@ def clock() -> FixedClock:
 
 
 async def _create_institution(uow: InMemoryUnitOfWork, clock: FixedClock, admin_id):
-    use_case = CreateInstitution(uow, clock)
+    use_case = CreateInstitution(uow, clock, NullUserAccounts())
     return await use_case.execute(
         name="Школа №1", kind=InstitutionKind.SCHOOL, created_by=admin_id
     )
@@ -81,7 +84,9 @@ async def test_admin_creates_teacher(
         display_name="Иван Иванов",
     )
 
-    assert accounts.calls == [("teacher@example.com", "correct horse")]
+    # Имя преподавателя уходит в users как профильное (план 11, этап 2):
+    # у него ещё нет профиля, и так он получает имя сразу.
+    assert accounts.calls == [("teacher@example.com", "correct horse", "Иван Иванов")]
     assert view.display_name == "Иван Иванов"
     assert view.status is MembershipStatus.ACTIVE
     scope = await uow.for_institution(institution.id)

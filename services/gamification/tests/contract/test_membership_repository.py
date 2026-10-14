@@ -133,3 +133,104 @@ async def test_update_changes_display_name_and_status(repos) -> None:
     fetched = await membership_repo.get_for_user(membership.user_id)
     assert fetched.display_name == "Имя"
     assert fetched.status is MembershipStatus.SUSPENDED
+
+
+async def test_profile_name_is_saved_and_read_back(repos) -> None:
+    """Профильное имя (план 11, этап 2) сохраняется и читается обеими
+    реализациями — отдельно от ``display_name`` (накладки админа)."""
+    institution_repo, membership_repo_for = repos
+    institution_id = await _seed_institution(institution_repo)
+    membership_repo = await membership_repo_for(institution_id)
+    membership = _new_membership(
+        institution_id=institution_id, profile_name="Профильное Имя"
+    )
+    await membership_repo.add(membership)
+
+    fetched = await membership_repo.get_for_user(membership.user_id)
+    assert fetched.profile_name == "Профильное Имя"
+    assert fetched.display_name is None
+    assert fetched.effective_name == "Профильное Имя"
+
+
+async def test_set_profile_name_updates_only_this_user_across_institutions(
+    user_memberships_repos,
+) -> None:
+    """Межарендная операция (план 11, этап 3): обновляет ``profile_name``
+    во всех учреждениях указанного пользователя и не задевает чужие
+    членства в тех же учреждениях; возвращает число обновлённых строк.
+    """
+    institution_repo, membership_repo_for, user_memberships = user_memberships_repos
+    institution_a = await _seed_institution(institution_repo)
+    institution_b = await _seed_institution(institution_repo)
+    user_id = uuid.uuid4()
+    stranger_id = uuid.uuid4()
+
+    membership_repo_a = await membership_repo_for(institution_a)
+    await membership_repo_a.add(
+        _new_membership(user_id=user_id, institution_id=institution_a)
+    )
+    membership_repo_b = await membership_repo_for(institution_b)
+    await membership_repo_b.add(
+        _new_membership(user_id=user_id, institution_id=institution_b)
+    )
+    membership_repo_b = await membership_repo_for(institution_b)
+    await membership_repo_b.add(
+        _new_membership(user_id=stranger_id, institution_id=institution_b)
+    )
+
+    updated = await user_memberships.set_profile_name(user_id, "Новое Имя")
+
+    assert updated == 2
+    membership_repo_a = await membership_repo_for(institution_a)
+    membership_repo_b = await membership_repo_for(institution_b)
+    assert (await membership_repo_a.get_for_user(user_id)).profile_name == ("Новое Имя")
+    assert (await membership_repo_b.get_for_user(user_id)).profile_name == ("Новое Имя")
+    assert (await membership_repo_b.get_for_user(stranger_id)).profile_name is None
+
+
+async def test_set_profile_name_for_unknown_user_updates_nothing(
+    user_memberships_repos,
+) -> None:
+    institution_repo, membership_repo_for, user_memberships = user_memberships_repos
+    await _seed_institution(institution_repo)
+
+    updated = await user_memberships.set_profile_name(uuid.uuid4(), "Кто-то")
+
+    assert updated == 0
+
+
+async def test_set_profile_name_with_none_resets_name(user_memberships_repos) -> None:
+    institution_repo, membership_repo_for, user_memberships = user_memberships_repos
+    institution_id = await _seed_institution(institution_repo)
+    membership_repo = await membership_repo_for(institution_id)
+    membership = _new_membership(
+        institution_id=institution_id, profile_name="Старое Имя"
+    )
+    await membership_repo.add(membership)
+
+    updated = await user_memberships.set_profile_name(membership.user_id, None)
+
+    assert updated == 1
+    membership_repo = await membership_repo_for(institution_id)
+    fetched = await membership_repo.get_for_user(membership.user_id)
+    assert fetched.profile_name is None
+
+
+async def test_update_preserves_profile_name_set_at_creation(repos) -> None:
+    """``update`` пишет ``profile_name`` membership'а как есть (раздел 9
+    плана 11) — здесь он не меняется, в отличие от ``display_name``."""
+    institution_repo, membership_repo_for = repos
+    institution_id = await _seed_institution(institution_repo)
+    membership_repo = await membership_repo_for(institution_id)
+    membership = _new_membership(
+        institution_id=institution_id, profile_name="Профильное Имя"
+    )
+    await membership_repo.add(membership)
+
+    membership.display_name = "Накладка"
+    await membership_repo.update(membership)
+
+    fetched = await membership_repo.get_for_user(membership.user_id)
+    assert fetched.profile_name == "Профильное Имя"
+    assert fetched.display_name == "Накладка"
+    assert fetched.effective_name == "Накладка"

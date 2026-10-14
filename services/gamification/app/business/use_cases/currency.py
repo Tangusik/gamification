@@ -87,7 +87,7 @@ async def _to_transaction_view(
         kind=transaction.kind,
         amount=transaction.amount,
         comment=transaction.comment,
-        created_by_name=author.display_name,
+        created_by_name=author.effective_name,
         created_by_role=author.role,
         created_at=transaction.created_at,
         reverses_id=transaction.reverses_id,

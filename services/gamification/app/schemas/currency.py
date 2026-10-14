@@ -89,6 +89,7 @@ class StudentRead(BaseModel):
 
     user_id: uuid.UUID
     display_name: str | None
+    display_name_override: str | None
     status: MembershipStatus
     created_at: datetime
     group_ids: list[uuid.UUID]

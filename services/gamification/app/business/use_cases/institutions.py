@@ -6,9 +6,32 @@ from dataclasses import dataclass
 
 from app.business.domain.entities import Institution, create_institution
 from app.business.domain.enums import InstitutionKind, MembershipStatus, UserRole
-from app.business.ports import Clock, UnitOfWork
+from app.business.domain.errors import UsersContractError, UsersUnavailableError
+from app.business.ports import Clock, UnitOfWork, UserAccounts
 
 logger = logging.getLogger(__name__)
+
+
+async def get_profile_name_or_none(
+    user_accounts: UserAccounts, user_id: uuid.UUID
+) -> str | None:
+    """Профильное имя из users, не повод отказать человеку в операции.
+
+    Общий приём для ``CreateInstitution`` и ``AcceptInvitation`` (план
+    11, этап 2, п. 6 раздела «Что сделать»): недоступность users или
+    ответ не по контракту не должны блокировать создание учреждения или
+    принятие приглашения — только warning в лог и ``profile_name=None``,
+    имя доедет этапом 3 (синхронизацией).
+    """
+    try:
+        return await user_accounts.get_full_name(user_id)
+    except (UsersUnavailableError, UsersContractError):
+        logger.warning(
+            "Could not fetch profile name from users for user_id=%s; "
+            "membership will be created without profile_name",
+            user_id,
+        )
+        return None
 
 
 @dataclass(frozen=True)
@@ -31,15 +54,28 @@ class CreateInstitution:
     администратора.
     """
 
-    def __init__(self, uow: UnitOfWork, clock: Clock) -> None:
+    def __init__(
+        self, uow: UnitOfWork, clock: Clock, user_accounts: UserAccounts
+    ) -> None:
         self._uow = uow
         self._clock = clock
+        self._user_accounts = user_accounts
 
     async def execute(
         self, *, name: str, kind: InstitutionKind, created_by: uuid.UUID
     ) -> Institution:
+        # Профильное имя создателя — вне открытой транзакции БД, тот же
+        # приём, что в CreateTeacher (use_cases/teachers.py). Имя — не
+        # повод отказать владельцу в создании учреждения: недоступность
+        # users или ответ не по контракту дают только warning и
+        # profile_name=None, имя доедет этапом 3 (синхронизацией).
+        profile_name = await get_profile_name_or_none(self._user_accounts, created_by)
         new_institution = create_institution(
-            name=name, kind=kind, created_by=created_by, now=self._clock.now()
+            name=name,
+            kind=kind,
+            created_by=created_by,
+            now=self._clock.now(),
+            profile_name=profile_name,
         )
         async with self._uow as uow:
             await uow.institutions.add(new_institution.institution)

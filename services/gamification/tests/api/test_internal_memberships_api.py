@@ -1,7 +1,9 @@
-"""API-тесты внутреннего эндпоинта ``POST /internal/memberships/resolve``.
+"""API-тесты внутренних эндпоинтов членств: ``POST .../resolve`` и
+``PATCH .../profile-name``.
 
-План `.claude/plans/10-refresh.md`, Ч2: эндпоинт зовёт только users при
-refresh, аутентификация — служебный секрет ``X-Service-Secret``, а не
+План `.claude/plans/10-refresh.md`, Ч2 (resolve) и
+`.claude/plans/11-user-name.md`, этап 3 (profile-name): оба зовёт только
+users, аутентификация — служебный секрет ``X-Service-Secret``, а не
 пользовательский токен (тело запроса вообще не содержит токена).
 """
 
@@ -139,6 +141,142 @@ async def test_resolve_without_secret_is_unauthorized(
 
     assert response.status_code == 401
     assert response.json() == {"detail": "SERVICE_AUTH_FAILED"}
+
+
+async def test_sync_profile_name_updates_all_institutions(
+    client: AsyncClient, app: FastAPI, token_factory, monkeypatch
+) -> None:
+    """Один и тот же пользователь — администратор двух учреждений
+    (членство заводится при создании каждого учреждения, план 11, этап
+    2); синхронизация должна обновить оба membership'а одним вызовом.
+
+    Чтение самого ``profile_name`` после синхронизации — контракт
+    ``UserMemberships.set_profile_name`` и db-тест RLS
+    (``tests/contract/test_membership_repository.py``,
+    ``tests/db/test_rls.py``): у API нет публичного эндпоинта, который
+    отдал бы администратору его же ``profile_name``, поэтому здесь
+    проверяется только число обновлённых членств.
+    """
+    _use_secret(monkeypatch)
+    user_id = uuid.uuid4()
+    token = token_factory(subject=user_id)
+    first = await client.post(
+        "/institutions",
+        json={"name": "Школа №1", "kind": "school"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    second = await client.post(
+        "/institutions",
+        json={"name": "Школа №2", "kind": "school"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+    response = await client.patch(
+        "/internal/memberships/profile-name",
+        json={"user_id": str(user_id), "full_name": "Новое Имя"},
+        headers={"X-Service-Secret": SECRET},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"updated": 2}
+
+
+async def test_sync_profile_name_for_user_without_memberships_is_200(
+    client: AsyncClient, app: FastAPI, monkeypatch
+) -> None:
+    _use_secret(monkeypatch)
+
+    response = await client.patch(
+        "/internal/memberships/profile-name",
+        json={"user_id": str(uuid.uuid4()), "full_name": "Кто-то"},
+        headers={"X-Service-Secret": SECRET},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"updated": 0}
+
+
+async def test_sync_profile_name_with_null_resets_name(
+    client: AsyncClient, app: FastAPI, token_factory, monkeypatch
+) -> None:
+    _use_secret(monkeypatch)
+    institution_id, admin_id = await _create_institution(client, token_factory)
+
+    response = await client.patch(
+        "/internal/memberships/profile-name",
+        json={"user_id": str(admin_id), "full_name": None},
+        headers={"X-Service-Secret": SECRET},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"updated": 1}
+
+
+async def test_sync_profile_name_rejects_name_longer_than_100(
+    client: AsyncClient, app: FastAPI, monkeypatch
+) -> None:
+    _use_secret(monkeypatch)
+
+    response = await client.patch(
+        "/internal/memberships/profile-name",
+        json={"user_id": str(uuid.uuid4()), "full_name": "д" * 101},
+        headers={"X-Service-Secret": SECRET},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_sync_profile_name_rejects_extra_field(
+    client: AsyncClient, app: FastAPI, monkeypatch
+) -> None:
+    _use_secret(monkeypatch)
+
+    response = await client.patch(
+        "/internal/memberships/profile-name",
+        json={"user_id": str(uuid.uuid4()), "full_name": "Имя", "extra": "unexpected"},
+        headers={"X-Service-Secret": SECRET},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_sync_profile_name_without_secret_is_unauthorized(
+    client: AsyncClient, app: FastAPI, monkeypatch
+) -> None:
+    _use_secret(monkeypatch)
+
+    response = await client.patch(
+        "/internal/memberships/profile-name",
+        json={"user_id": str(uuid.uuid4()), "full_name": "Имя"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "SERVICE_AUTH_FAILED"}
+
+
+async def test_sync_profile_name_with_wrong_secret_is_unauthorized(
+    client: AsyncClient, app: FastAPI, monkeypatch
+) -> None:
+    _use_secret(monkeypatch)
+
+    response = await client.patch(
+        "/internal/memberships/profile-name",
+        json={"user_id": str(uuid.uuid4()), "full_name": "Имя"},
+        headers={"X-Service-Secret": "wrong-secret"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "SERVICE_AUTH_FAILED"}
+
+
+async def test_sync_profile_name_endpoint_is_absent_from_public_schema(
+    client: AsyncClient,
+) -> None:
+    schema = (await client.get("/openapi-gamification.json")).json()
+
+    assert "/internal/memberships/profile-name" not in schema["paths"]
 
 
 async def test_resolve_with_wrong_secret_is_unauthorized(

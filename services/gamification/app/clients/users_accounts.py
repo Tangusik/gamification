@@ -24,6 +24,7 @@ from app.business.domain.errors import (
 logger = logging.getLogger(__name__)
 
 CREATE_ACCOUNT_PATH = "/internal/users"
+GET_USER_PATH = "/internal/users/{user_id}"
 
 
 class UsersAccounts:
@@ -36,12 +37,17 @@ class UsersAccounts:
         self._base_url = base_url.rstrip("/")
         self._service_secret = service_secret
 
-    async def create_account(self, *, email: str, password: str) -> uuid.UUID:
+    async def create_account(
+        self, *, email: str, password: str, full_name: str | None = None
+    ) -> uuid.UUID:
         """См. ``app.business.ports.UserAccounts.create_account``."""
+        body: dict[str, str | None] = {"email": email, "password": password}
+        if full_name is not None:
+            body["full_name"] = full_name
         try:
             response = await self._client.post(
                 f"{self._base_url}{CREATE_ACCOUNT_PATH}",
-                json={"email": email, "password": password},
+                json=body,
                 headers={"X-Service-Secret": self._service_secret},
             )
         except httpx.HTTPError:
@@ -77,6 +83,49 @@ class UsersAccounts:
 
         logger.error(
             "Unexpected response from users account creation: status=%s",
+            response.status_code,
+        )
+        raise UsersUnavailableError
+
+    async def get_full_name(self, user_id: uuid.UUID) -> str | None:
+        """См. ``app.business.ports.UserAccounts.get_full_name``.
+
+        Тот же клиент, таймаут и служебный секрет, что у
+        ``create_account``; имя пользователя в логах не фигурирует —
+        только код ответа и его смысл.
+        """
+        try:
+            response = await self._client.get(
+                f"{self._base_url}{GET_USER_PATH.format(user_id=user_id)}",
+                headers={"X-Service-Secret": self._service_secret},
+            )
+        except httpx.HTTPError:
+            logger.error("Users profile lookup is unreachable", exc_info=True)
+            raise UsersUnavailableError from None
+
+        if response.status_code == 200:
+            try:
+                body = response.json()
+                full_name = body["full_name"]
+            except (ValueError, KeyError, TypeError):
+                logger.error(
+                    "Users returned a 200 response with a malformed body: status=%s",
+                    response.status_code,
+                )
+                raise UsersContractError from None
+            if full_name is not None and not isinstance(full_name, str):
+                raise UsersContractError
+            return full_name
+        if response.status_code == 404:
+            return None
+        if response.status_code == 401:
+            # Авария на нашей стороне (служебный секрет не принят), а не
+            # отказ клиенту в правах — тот же принцип, что у create_account.
+            logger.error("Service authentication with users was rejected")
+            raise UsersUnavailableError
+
+        logger.error(
+            "Unexpected response from users profile lookup: status=%s",
             response.status_code,
         )
         raise UsersUnavailableError

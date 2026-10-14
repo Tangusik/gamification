@@ -13,6 +13,7 @@ import { request } from './client'
 export type InstitutionMember = {
   user_id: string
   display_name: string | null
+  display_name_override: string | null
   status: MembershipStatus
   created_at: string
   group_ids: string[]

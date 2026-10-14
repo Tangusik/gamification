@@ -14,10 +14,15 @@ class FakeUserAccounts:
         self._user_id = user_id or uuid.uuid4()
         self._error = error
 
-    async def create_account(self, *, email: str, password: str):
+    async def create_account(
+        self, *, email: str, password: str, full_name: str | None = None
+    ):
         if self._error is not None:
             raise self._error
         return self._user_id
+
+    async def get_full_name(self, user_id):
+        return None
 
 
 def _headers(token: str) -> dict[str, str]:
@@ -58,6 +63,7 @@ async def test_admin_creates_teacher(
     assert response.status_code == 201
     body = response.json()
     assert body["display_name"] == "Иван"
+    assert body["display_name_override"] == "Иван"
     assert body["status"] == "active"
     assert body["group_ids"] == []
 

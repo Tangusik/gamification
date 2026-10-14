@@ -9,6 +9,7 @@ from app.business.domain.enums import InstitutionKind, MembershipStatus, UserRol
 from app.business.use_cases.institutions import CreateInstitution, ListMyInstitutions
 from app.repositories.in_memory import InMemoryStore
 from app.repositories.uow import InMemoryUnitOfWork
+from tests.business.conftest import NullUserAccounts
 
 
 class FixedClock:
@@ -62,7 +63,7 @@ async def test_create_institution_creates_admin_membership_in_one_transaction(
 ) -> None:
     """Учреждение и членство создателя появляются одним актом (E1)."""
     created_by = uuid.uuid4()
-    use_case = CreateInstitution(uow, clock)
+    use_case = CreateInstitution(uow, clock, NullUserAccounts())
 
     institution = await use_case.execute(
         name="Школа №1", kind=InstitutionKind.SCHOOL, created_by=created_by
@@ -80,7 +81,7 @@ async def test_failure_after_institution_insert_leaves_nothing(
 ) -> None:
     """Сбой после вставки учреждения не оставляет ни его, ни членства."""
     uow = FailOnMembershipUnitOfWork(store)
-    use_case = CreateInstitution(uow, clock)
+    use_case = CreateInstitution(uow, clock, NullUserAccounts())
 
     with pytest.raises(RuntimeError):
         await use_case.execute(
@@ -91,13 +92,50 @@ async def test_failure_after_institution_insert_leaves_nothing(
     assert store.memberships == {}
 
 
+async def test_create_institution_fills_profile_name_from_users(
+    uow: InMemoryUnitOfWork, clock: FixedClock
+) -> None:
+    """Профильное имя создателя подтягивается из users (план 11, этап 2)."""
+    created_by = uuid.uuid4()
+    user_accounts = NullUserAccounts(full_names={created_by: "Профильное Имя"})
+    use_case = CreateInstitution(uow, clock, user_accounts)
+
+    institution = await use_case.execute(
+        name="Школа №1", kind=InstitutionKind.SCHOOL, created_by=created_by
+    )
+
+    scope = await uow.for_institution(institution.id)
+    membership = await scope.memberships.get_for_user(created_by)
+    assert membership is not None
+    assert membership.profile_name == "Профильное Имя"
+    assert membership.effective_name == "Профильное Имя"
+
+
+async def test_create_institution_succeeds_when_users_is_unavailable(
+    uow: InMemoryUnitOfWork, clock: FixedClock
+) -> None:
+    """Недоступность users не блокирует создание учреждения (план 11,
+    п. 6): членство заводится с ``profile_name=None``."""
+    created_by = uuid.uuid4()
+    use_case = CreateInstitution(uow, clock, NullUserAccounts(unavailable=True))
+
+    institution = await use_case.execute(
+        name="Школа №1", kind=InstitutionKind.SCHOOL, created_by=created_by
+    )
+
+    scope = await uow.for_institution(institution.id)
+    membership = await scope.memberships.get_for_user(created_by)
+    assert membership is not None
+    assert membership.profile_name is None
+
+
 async def test_list_my_institutions_hides_foreign_institutions(
     uow: InMemoryUnitOfWork, clock: FixedClock
 ) -> None:
     """Чужое учреждение не видно (раздел этапа 3, критерий готовности)."""
     owner = uuid.uuid4()
     stranger = uuid.uuid4()
-    create = CreateInstitution(uow, clock)
+    create = CreateInstitution(uow, clock, NullUserAccounts())
     institution = await create.execute(
         name="Школа", kind=InstitutionKind.SCHOOL, created_by=owner
     )

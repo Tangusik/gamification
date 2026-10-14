@@ -1,18 +1,16 @@
 /** Страница регистрации. После успеха пользователь сразу входит. */
 import { useState, type FormEvent } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router'
+import { Link, useLocation } from 'react-router'
 
 import { ApiError } from '../api/errors'
 import { useAuth } from '../auth/authContext'
 import type { FromState } from '../auth/fromLocation'
-import { targetFromState } from '../auth/fromLocation'
 import { FieldError } from '../components/FieldError'
 import { FormError } from '../components/FormError'
 import { messageForError } from '../i18n/errorMessages'
 
 export function RegisterPage() {
   const { register } = useAuth()
-  const navigate = useNavigate()
   const location = useLocation()
 
   // Сюда ведёт и неавторизованный переход по ссылке-приглашению
@@ -31,7 +29,6 @@ export function RegisterPage() {
     setError(null)
     try {
       await register(email, password)
-      navigate(targetFromState(location.state), { replace: true })
     } catch (caught) {
       setError(caught instanceof ApiError ? caught : new ApiError(0, 'UNKNOWN_ERROR'))
     } finally {

@@ -187,9 +187,17 @@ class MembershipModel(Base):
     invitation_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("invitations.id", ondelete="SET NULL"), nullable=True
     )
-    # Имя участника в пределах учреждения (В4/D1). NULL, пока админ его
-    # не заполнил — у пришедших по приглашению оно изначально пустое.
+    # Имя участника в пределах учреждения (В4/D1) — необязательная
+    # накладка админа поверх профильного имени. NULL, пока админ его не
+    # заполнил.
     display_name: Mapped[str | None] = mapped_column(
+        String(length=DISPLAY_NAME_LENGTH), nullable=True
+    )
+    # Копия профильного имени (``users.full_name``), синхронизируемая из
+    # users (план 11, этап 2). В отличие от ``display_name`` это не
+    # решение админа, а кэш чужих данных — показывается, когда накладки
+    # нет (``Membership.effective_name``).
+    profile_name: Mapped[str | None] = mapped_column(
         String(length=DISPLAY_NAME_LENGTH), nullable=True
     )
 

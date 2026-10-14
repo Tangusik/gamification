@@ -89,7 +89,7 @@ async def _to_purchase_view(
         # может исчезнуть, пока на него ссылается покупка.
         assert member is not None
         user_id = member.user_id
-        user_name = member.display_name
+        user_name = member.effective_name
     return PurchaseView(
         id=purchase.id,
         privilege_id=purchase.privilege_id,

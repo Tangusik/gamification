@@ -8,6 +8,39 @@ import '../../auth/test_support.dart';
 import 'test_harness.dart';
 
 void main() {
+  testWidgets('имя показывается и сохраняется', (tester) async {
+    final institutionId = 'inst-1';
+    final token = fakeJwt({
+      'sub': 'u1',
+      'institution_id': institutionId,
+      'exp': unixSecondsFromNow(const Duration(minutes: 15)),
+    });
+    final storage = InMemoryTokenStorage();
+    await storage.writeToken(token);
+    await storage.writeLastInstitutionId(institutionId);
+
+    String? sentFullName;
+    final container = await pumpTestApp(tester, storage, {
+      'GET /users/me': (o) async => jsonResponse(200, userJson(fullName: 'Иван Иванов')),
+      'GET /institutions': (o) async => jsonResponse(200, [membershipJson(institutionId: institutionId)]),
+      'PATCH /users/me': (o) async {
+        sentFullName = (o.data as Map<String, dynamic>)['full_name'] as String?;
+        return jsonResponse(200, userJson(fullName: sentFullName));
+      },
+    });
+
+    container.read(goRouterProvider).go('/profile');
+    await pumpFrames(tester);
+    expect(find.text('Профиль'), findsWidgets);
+    expect(find.text('Иван Иванов'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).first, 'Пётр Петров');
+    await tapAndSettle(tester, find.text('Сохранить имя'));
+
+    expect(sentFullName, 'Пётр Петров');
+    expect(container.read(sessionProvider).user?.fullName, 'Пётр Петров');
+  });
+
   testWidgets('выход подтверждается диалогом и уводит на вход', (tester) async {
     final institutionId = 'inst-1';
     final token = fakeJwt({

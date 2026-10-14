@@ -1,10 +1,15 @@
 """Тесты сценария регистрации, входа и работы с собственным профилем."""
 
+import uuid
 from collections.abc import Awaitable, Callable
 
+import pytest
+from fastapi import FastAPI
 from httpx import AsyncClient, Response
 
+from app.api.deps import get_memberships_client
 from app.business.domain.entities import User
+from app.business.domain.errors import MembershipCheckUnavailableError
 
 EMAIL = "student@example.com"
 PASSWORD = "correct-horse-battery-staple"
@@ -12,6 +17,31 @@ PASSWORD = "correct-horse-battery-staple"
 Register = Callable[..., Awaitable[Response]]
 Login = Callable[..., Awaitable[Response]]
 AuthHeaders = Callable[..., Awaitable[dict[str, str]]]
+
+
+class FakeMemberships:
+    """Двойник gamification-клиента для тестов синхронизации имени (план
+    11-user-name, этап 3). Управляется тестом через ``error``."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[tuple[uuid.UUID, str | None]] = []
+
+    async def sync_profile_name(
+        self, *, user_id: uuid.UUID, full_name: str | None
+    ) -> int:
+        self.calls.append((user_id, full_name))
+        if self.error is not None:
+            raise self.error
+        return 1
+
+
+@pytest.fixture
+def fake_memberships(app: FastAPI) -> FakeMemberships:
+    """Подменить клиент gamification фейком на время одного теста."""
+    fake = FakeMemberships()
+    app.dependency_overrides[get_memberships_client] = lambda: fake
+    return fake
 
 
 async def test_register_creates_plain_user_without_password_leak(
@@ -127,6 +157,198 @@ async def test_patch_me_cannot_escalate_role_or_superuser(
     assert "role" not in reread.json()
     assert reread.json()["is_superuser"] is False
     assert find_user(EMAIL).is_superuser is False
+
+
+async def test_patch_me_sets_full_name(
+    client: AsyncClient, register: Register, auth_headers: AuthHeaders
+) -> None:
+    """PATCH /users/me сохраняет имя и отдаёт его в ответе и в GET."""
+    await register(EMAIL, PASSWORD)
+    headers = await auth_headers(EMAIL, PASSWORD)
+
+    response = await client.patch(
+        "/users/me", headers=headers, json={"full_name": "Иван Иванов"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["full_name"] == "Иван Иванов"
+
+    reread = await client.get("/users/me", headers=headers)
+    assert reread.json()["full_name"] == "Иван Иванов"
+
+
+async def test_patch_me_full_name_too_long_rejected(
+    client: AsyncClient, register: Register, auth_headers: AuthHeaders
+) -> None:
+    """Имя длиннее 100 символов отклоняется схемой."""
+    await register(EMAIL, PASSWORD)
+    headers = await auth_headers(EMAIL, PASSWORD)
+
+    response = await client.patch(
+        "/users/me", headers=headers, json={"full_name": "a" * 101}
+    )
+
+    assert response.status_code == 422, response.text
+
+
+async def test_patch_me_full_name_null_resets_it(
+    client: AsyncClient, register: Register, auth_headers: AuthHeaders
+) -> None:
+    """``full_name: null`` сбрасывает ранее установленное имя."""
+    await register(EMAIL, PASSWORD)
+    headers = await auth_headers(EMAIL, PASSWORD)
+    await client.patch("/users/me", headers=headers, json={"full_name": "Имя"})
+
+    response = await client.patch(
+        "/users/me", headers=headers, json={"full_name": None}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["full_name"] is None
+
+    reread = await client.get("/users/me", headers=headers)
+    assert reread.json()["full_name"] is None
+
+
+async def test_patch_me_full_name_empty_string_normalized_to_null(
+    client: AsyncClient, register: Register, auth_headers: AuthHeaders
+) -> None:
+    """Пустая строка нормализуется в ``null``, а не хранится как есть."""
+    await register(EMAIL, PASSWORD)
+    headers = await auth_headers(EMAIL, PASSWORD)
+
+    response = await client.patch("/users/me", headers=headers, json={"full_name": ""})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["full_name"] is None
+
+
+async def test_patch_me_full_name_blank_string_normalized_to_null(
+    client: AsyncClient, register: Register, auth_headers: AuthHeaders
+) -> None:
+    """Строка из одних пробелов нормализуется в ``null``, как и пустая."""
+    await register(EMAIL, PASSWORD)
+    headers = await auth_headers(EMAIL, PASSWORD)
+
+    response = await client.patch(
+        "/users/me", headers=headers, json={"full_name": "   "}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["full_name"] is None
+
+
+async def test_patch_me_full_name_edge_spaces_trimmed(
+    client: AsyncClient, register: Register, auth_headers: AuthHeaders
+) -> None:
+    """Краевые пробелы у непустого имени срезаются при сохранении."""
+    await register(EMAIL, PASSWORD)
+    headers = await auth_headers(EMAIL, PASSWORD)
+
+    response = await client.patch(
+        "/users/me", headers=headers, json={"full_name": "  Иван Иванов  "}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["full_name"] == "Иван Иванов"
+
+
+async def test_patch_me_full_name_empty_string_triggers_sync_with_null(
+    client: AsyncClient,
+    register: Register,
+    auth_headers: AuthHeaders,
+    fake_memberships: FakeMemberships,
+) -> None:
+    """Сброс имени пустой строкой доезжает до синхронизации как ``None``.
+
+    Нормализация ``""`` -> ``None`` не должна прятать ключ
+    ``"full_name"`` из ``update_dict`` в ``on_after_update``: это явный
+    сброс имени, а не отсутствие поля в теле запроса (см.
+    ``app/auth/user_manager.py``).
+    """
+    created = (await register(EMAIL, PASSWORD)).json()
+    headers = await auth_headers(EMAIL, PASSWORD)
+    await client.patch("/users/me", headers=headers, json={"full_name": "Имя"})
+
+    response = await client.patch("/users/me", headers=headers, json={"full_name": ""})
+
+    assert response.status_code == 200, response.text
+    assert fake_memberships.calls[-1] == (uuid.UUID(created["id"]), None)
+
+
+async def test_patch_me_full_name_triggers_profile_name_sync(
+    client: AsyncClient,
+    register: Register,
+    auth_headers: AuthHeaders,
+    fake_memberships: FakeMemberships,
+) -> None:
+    """Смена ``full_name`` дёргает синхронизацию ровно один раз."""
+    created = (await register(EMAIL, PASSWORD)).json()
+    headers = await auth_headers(EMAIL, PASSWORD)
+
+    response = await client.patch(
+        "/users/me", headers=headers, json={"full_name": "Иван Иванов"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert fake_memberships.calls == [(uuid.UUID(created["id"]), "Иван Иванов")]
+
+
+async def test_patch_me_without_full_name_does_not_trigger_sync(
+    client: AsyncClient,
+    register: Register,
+    auth_headers: AuthHeaders,
+    fake_memberships: FakeMemberships,
+) -> None:
+    """Смена пароля без ``full_name`` в теле синхронизацию не дёргает."""
+    await register(EMAIL, PASSWORD)
+    headers = await auth_headers(EMAIL, PASSWORD)
+
+    response = await client.patch(
+        "/users/me", headers=headers, json={"password": "another-strong-password"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert fake_memberships.calls == []
+
+
+async def test_patch_me_succeeds_even_if_profile_name_sync_fails(
+    client: AsyncClient,
+    register: Register,
+    auth_headers: AuthHeaders,
+    fake_memberships: FakeMemberships,
+) -> None:
+    """Недоступность gamification не должна блокировать ``PATCH /users/me``.
+
+    Синхронизация best-effort (решение ведущего задачи, план
+    11-user-name): имя сохраняется в users независимо от её исхода.
+    """
+    fake_memberships.error = MembershipCheckUnavailableError()
+    await register(EMAIL, PASSWORD)
+    headers = await auth_headers(EMAIL, PASSWORD)
+
+    response = await client.patch(
+        "/users/me", headers=headers, json={"full_name": "Иван Иванов"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["full_name"] == "Иван Иванов"
+
+    reread = await client.get("/users/me", headers=headers)
+    assert reread.json()["full_name"] == "Иван Иванов"
+
+
+async def test_users_me_full_name_absent_by_default(
+    client: AsyncClient, register: Register, auth_headers: AuthHeaders
+) -> None:
+    """Сразу после регистрации имя отсутствует (``None``) в профиле."""
+    await register(EMAIL, PASSWORD)
+    headers = await auth_headers(EMAIL, PASSWORD)
+
+    response = await client.get("/users/me", headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["full_name"] is None
 
 
 async def test_inactive_user_is_rejected(

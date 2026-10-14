@@ -92,10 +92,11 @@ class ListStudents:
                 views.append(
                     StudentView(
                         user_id=student.user_id,
-                        display_name=student.display_name,
+                        display_name=student.effective_name,
                         status=student.status,
                         created_at=student.created_at,
                         group_ids=visible_group_ids,
+                        display_name_override=student.display_name,
                         balance=balances.get(student.id, 0),
                     )
                 )
@@ -147,8 +148,9 @@ class UpdateStudent:
 def _to_view(membership: Membership, group_ids: list[uuid.UUID]) -> MemberView:
     return MemberView(
         user_id=membership.user_id,
-        display_name=membership.display_name,
+        display_name=membership.effective_name,
         status=membership.status,
         created_at=membership.created_at,
         group_ids=group_ids,
+        display_name_override=membership.display_name,
     )

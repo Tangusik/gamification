@@ -35,6 +35,9 @@ from app.business.domain.internal_errors import (
 from app.business.domain.internal_errors import (
     UserAlreadyExistsError as InternalUserAlreadyExistsError,
 )
+from app.business.domain.internal_errors import (
+    UserNotFoundError as InternalUserNotFoundError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,7 @@ INTERNAL_ERROR_STATUS: dict[type[InternalApiError], int] = {
     ServiceAuthFailedError: 401,
     InternalUserAlreadyExistsError: 409,
     PasswordRejectedError: 400,
+    InternalUserNotFoundError: 404,
 }
 DEFAULT_INTERNAL_ERROR_STATUS = 403
 

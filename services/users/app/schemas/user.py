@@ -2,9 +2,10 @@
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi_users import schemas
+from pydantic import BeforeValidator, Field
 
 # Ключи, которых нет ни в схемах, ни в сущности пользователя, но которые
 # клиент может прислать в теле запроса. Вычищаются до конструктора
@@ -15,6 +16,46 @@ from fastapi_users import schemas
 # только сервером — при смене пароля (``app/auth/user_manager.py``).
 # Сокращать набор нельзя, см. ``_strip_protected_fields``.
 _PROTECTED_FIELDS = ("role", "institution_id", "created_at", "must_change_password")
+
+
+def _normalize_full_name(value: str | None) -> str | None:
+    """Привести имя к единому виду до любых других проверок поля.
+
+    Пустая строка и строка из одних пробелов превращаются в ``None`` —
+    два вида «пустого имени» в БД не нужны (решение владельца,
+    2026-10-12). У непустого имени срезаются только краевые пробелы.
+
+    Нормализация объявлена ``BeforeValidator``, то есть выполняется до
+    проверки ``max_length=100`` у поля. Порядок выбран осознанно: имя с
+    краевыми пробелами, умещающееся в 100 значимых символов без них,
+    не должно падать в 422 из-за пробелов, которые дальше всё равно
+    срезаются. Проверка длины после нормализации считает ровно то, что
+    в итоге попадёт в БД.
+    """
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+# Общий тип поля имени — единственное место нормализации (решение
+# владельца, 2026-10-12): используется и в ``UserUpdate`` (``PATCH
+# /users/me``), и внутренним роутером (``POST /internal/users``,
+# ``app/api/internal/internal_router.py``), чтобы не разводить правило
+# по схемам и клиентам.
+#
+# ``max_length`` объявлен на строковой ветке, а не на всём
+# ``str | None``: ограничение длины, навешенное на union, pydantic
+# пытается применить и к ``None`` — ``len(None)`` даёт ``TypeError``, то
+# есть 500 на любом запросе без имени. Проверено тестами
+# ``tests/test_internal_users.py``.
+_FullNameValue = Annotated[str, Field(max_length=100)]
+
+FullName = Annotated[
+    _FullNameValue | None,
+    BeforeValidator(_normalize_full_name),
+    Field(default=None),
+]
 
 
 def _strip_protected_fields(payload: dict[str, Any]) -> dict[str, Any]:
@@ -45,10 +86,15 @@ class UserRead(schemas.BaseUser[uuid.UUID]):
     ``must_change_password`` присутствует и отдаётся всегда: по нему
     клиент решает, уводить ли пользователя на смену пароля (решение C1).
     Снять флаг через тело запроса нельзя — см. ``_PROTECTED_FIELDS``.
+
+    ``full_name`` — единственное поле имени человека (решение владельца,
+    план 11-user-name): без разбивки на части, правит его сам
+    пользователь через ``PATCH /users/me``.
     """
 
     created_at: datetime
     must_change_password: bool
+    full_name: str | None = Field(default=None, max_length=100)
 
 
 class UserCreate(schemas.BaseUserCreate):
@@ -86,7 +132,18 @@ class UserUpdate(schemas.BaseUserUpdate):
 
     Поля ``role`` нет вовсе: роль живёт в членстве, и меняет её будущий
     админ-роутер учреждения, а не владелец профиля.
+
+    ``full_name`` правит сам пользователь: поле не входит в
+    ``_PROTECTED_FIELDS``. ``{"full_name": null}`` сбрасывает имя —
+    осознанно допустимо (план 11-user-name). Пустая строка и строка из
+    пробелов нормализуются в ``None`` тем же способом (``FullName``,
+    решение владельца 2026-10-12) — явный сброс имени доезжает до
+    ``on_after_update`` так же, как и ``null``: ``exclude_unset``
+    отражает, что поле пришло в теле запроса, а не его итоговое
+    значение.
     """
+
+    full_name: FullName
 
     def create_update_dict(self) -> dict[str, Any]:
         """Вернуть данные для обновления пользователя без серверных полей.

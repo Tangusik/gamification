@@ -264,12 +264,18 @@ async def get_user_manager(
     refresh_sessions: Annotated[
         RefreshSessionRepository, Depends(get_refresh_session_repository)
     ],
+    memberships_client: Annotated[
+        GamificationMembershipsClient, Depends(get_memberships_client)
+    ],
 ) -> AsyncGenerator[UserManager]:
     """Провайдер прикладного менеджера пользователей.
 
     Менеджер получает хранилище по псевдониму ``UserRepository``, поэтому
     смена реализации хранилища его не затрагивает. ``refresh_sessions``
     нужен, чтобы смена пароля могла погасить все сессии пользователя
-    (вопрос 5, план 10-refresh).
+    (вопрос 5, план 10-refresh). ``memberships_client`` — тот же клиент,
+    что и у refresh (единственный HTTP-клиент приложения), нужен, чтобы
+    ``PATCH /users/me`` синхронизировал новое имя в gamification
+    (план 11-user-name, этап 3).
     """
-    yield UserManager(user_db, refresh_sessions)
+    yield UserManager(user_db, refresh_sessions, memberships_client)

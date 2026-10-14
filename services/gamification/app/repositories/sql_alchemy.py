@@ -169,6 +169,7 @@ def _membership_to_domain(row: MembershipModel) -> Membership:
         created_at=row.created_at,
         invitation_id=row.invitation_id,
         display_name=row.display_name,
+        profile_name=row.profile_name,
     )
 
 
@@ -236,6 +237,7 @@ class SqlAlchemyInstitutionMemberships:
             created_at=membership.created_at,
             invitation_id=membership.invitation_id,
             display_name=membership.display_name,
+            profile_name=membership.profile_name,
         )
         async with _unique_violation_as(self._session, MembershipAlreadyExistsError):
             self._session.add(model)
@@ -277,6 +279,7 @@ class SqlAlchemyInstitutionMemberships:
         if row is None:
             return
         row.display_name = membership.display_name
+        row.profile_name = membership.profile_name
         row.status = membership.status
         await self._session.flush()
 
@@ -302,6 +305,28 @@ class SqlAlchemyUserMemberships:
         statement = select(MembershipModel).where(MembershipModel.user_id == user_id)
         result = await self._session.execute(statement)
         return [_membership_to_domain(row) for row in result.scalars().all()]
+
+    async def set_profile_name(self, user_id: uuid.UUID, full_name: str | None) -> int:
+        """:see: ``app.business.ports.UserMemberships.set_profile_name``.
+
+        Выставляет ``app.profile_sync_user_id`` — служебную переменную
+        сессии под отдельную permissive-политику ``memberships``
+        (миграция ``0008``), параметром, а не форматированием строки,
+        как и ``app.user_id`` в ``list_for_user``. Эту переменную
+        выставляет только этот метод — расширять её использование на
+        другие операции нельзя (цена решения описана в docstring'е
+        миграции ``0008``).
+        """
+        await self._session.execute(
+            text("SELECT set_config('app.profile_sync_user_id', :value, true)"),
+            {"value": str(user_id)},
+        )
+        result = await self._session.execute(
+            update(MembershipModel)
+            .where(MembershipModel.user_id == user_id)
+            .values(profile_name=full_name)
+        )
+        return result.rowcount
 
 
 class SqlAlchemyInstitutionInvitations:

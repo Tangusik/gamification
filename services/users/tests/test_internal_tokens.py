@@ -23,6 +23,9 @@ from app.business.domain.internal_errors import (
     SubjectTokenRejectedError,
     UserAlreadyExistsError,
 )
+from app.business.domain.internal_errors import (
+    UserNotFoundError as InternalUserNotFoundError,
+)
 from app.core.config import InsecureSettingError, Settings, get_settings
 from app.core.exceptions import internal_error_status
 
@@ -31,7 +34,8 @@ URL = "/internal/tokens/institution-context"
 # Ожидаемый словарь целиком — своё пространство кодов, отдельное от
 # ``access_errors`` (тот уехал в gamification вместе с членствами).
 # ``UserAlreadyExistsError`` и ``PasswordRejectedError`` относятся к
-# ``POST /internal/users`` (см. ``tests/test_internal_users.py``), но
+# ``POST /internal/users``, ``UserNotFoundError`` — к
+# ``GET /internal/users/{id}`` (см. ``tests/test_internal_users.py``), но
 # словарь один на всё пространство ``InternalApiError`` — тест полноты
 # обязан видеть все объявленные коды сразу.
 EXPECTED_CATALOGUE = {
@@ -39,6 +43,7 @@ EXPECTED_CATALOGUE = {
     SubjectTokenRejectedError: ("SUBJECT_TOKEN_REJECTED", 403),
     UserAlreadyExistsError: ("USER_ALREADY_EXISTS", 409),
     PasswordRejectedError: ("PASSWORD_REJECTED", 400),
+    InternalUserNotFoundError: ("USER_NOT_FOUND", 404),
 }
 
 

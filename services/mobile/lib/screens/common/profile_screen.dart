@@ -9,7 +9,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../api/auth_api.dart' show Membership, MembershipStatus;
+import '../../api/auth_api.dart' show Membership, MembershipStatus, User, updateFullName;
 import '../../api/errors.dart';
 import '../../auth/session.dart';
 import '../../i18n/error_messages.dart';
@@ -30,9 +30,45 @@ class ProfileScreen extends ConsumerStatefulWidget {
 }
 
 class _ProfileScreenState extends ConsumerState<ProfileScreen> {
+  final _nameController = TextEditingController();
+  String? _nameLoadedForUserId;
+  bool _nameSaving = false;
+  ApiError? _nameSaveError;
+
   String? _switchingId;
   ApiError? _switchError;
   bool _loggingOut = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  void _applyUserName(User? user) {
+    _nameLoadedForUserId = user?.id;
+    _nameController.text = user?.fullName ?? '';
+  }
+
+  Future<void> _saveName() async {
+    setState(() {
+      _nameSaving = true;
+      _nameSaveError = null;
+    });
+    try {
+      final client = ref.read(apiClientProvider);
+      final trimmed = _nameController.text.trim();
+      final updated = await updateFullName(client, trimmed.isEmpty ? null : trimmed);
+      if (!mounted) return;
+      ref.read(sessionProvider.notifier).updateUser(updated);
+      showSavedNotice(context, text: 'Имя сохранено');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _nameSaveError = error is ApiError ? error : const ApiError(0, unknownError));
+    } finally {
+      if (mounted) setState(() => _nameSaving = false);
+    }
+  }
 
   Future<void> _switchInstitution(String institutionId) async {
     setState(() {
@@ -76,6 +112,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     final institution = session.institution;
     final memberships = session.memberships;
     final membershipsError = session.membershipsError;
+    if (_nameLoadedForUserId != user?.id) _applyUserName(user);
+    final nameFieldErrors = _nameSaveError?.fieldErrors;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Профиль')),
@@ -86,6 +124,23 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             Text('Почта', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: AppSpacing.xs),
             Text(user?.email ?? ''),
+            const SizedBox(height: AppSpacing.xl),
+
+            Text('Имя', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: AppSpacing.xs),
+            TextField(
+              controller: _nameController,
+              enabled: !_nameSaving,
+              maxLength: 100,
+              decoration: const InputDecoration(labelText: 'Имя'),
+            ),
+            FieldErrorText(nameFieldErrors?['full_name']),
+            FormErrorText(_nameSaveError == null ? null : messageForError(_nameSaveError!)),
+            const SizedBox(height: AppSpacing.sm),
+            OutlinedButton(
+              onPressed: _nameSaving ? null : _saveName,
+              child: Text(_nameSaving ? 'Сохраняем…' : 'Сохранить имя'),
+            ),
             const SizedBox(height: AppSpacing.xl),
 
             Text('Пароль', style: Theme.of(context).textTheme.titleMedium),
